@@ -47,18 +47,63 @@ If you are Claude Code reading this file, **you are the lead agent** (Lab role).
 
 When drafting tasks with the human, recommend which agent type should execute each task. Write your recommendation in the "Agent Type" field of TASKS.md.
 
-**Default to Codex.** You (Claude Code) are already here as the lead agent — you handle planning, coordination, and interactive work. Most execution tasks should be dispatched to Codex via `/dispatch`. Only keep work in Claude Code when it genuinely needs interactive human-agent iteration.
+**Default to Codex for execution.** You (Claude Code) are the lead agent — you plan, coordinate, and handle interactive work. Most implementation tasks should be dispatched to Codex via `/dispatch`. Use the right tool for the job:
 
-| Recommend | When | Why |
-|---|---|---|
-| **Codex CLI** (default) | Implementation tasks, well-scoped features, bug fixes, tests, code review, isolated modules, any task with clear acceptance criteria | Your go-to worker. Runs autonomously, delivers results, has dedicated `codex review`. Dispatch via `/dispatch` and move on to the next thing. |
-| **Claude Code worker** | Tasks requiring multi-step exploration where the path isn't clear upfront, complex refactors touching many files with judgment calls mid-task | Only when a task genuinely can't be specified upfront. Ask yourself: "Can I write clear acceptance criteria?" If yes → Codex. |
-| **You (lead, interactively)** | Cyborg tasks the human wants to co-create, planning sessions, synthesis across workstreams, ambiguous/creative work | This is your primary mode — working with the human, not executing alone. |
-| **Human-Only** | Irreversible actions, security-sensitive operations, external communications, final approvals | Agent prepares materials but human executes. Gates (G0-G4) are always human-only. |
+### Codex CLI — dispatch via `/dispatch`
 
-**The decision heuristic:** Can I write acceptance criteria for this task? → **Codex.** Does the human need to steer mid-task? → **You, interactively.** Is it irreversible? → **Human-Only.**
+Codex's strengths: sandboxed execution (safe to let it run autonomously), `codex review` purpose-built for code review, `--full-auto` for hands-off completion, designed for clear-spec-in → working-code-out.
 
-**Second opinion pattern:** For important decisions, recommend running both you and Codex independently and comparing outputs. Note this in the task: "Run as second-opinion — compare with [other task ID]."
+| Task Type | Example |
+|---|---|
+| Implement a module from a spec | "Build the auth module per contract in docs/contracts/auth-api.md" |
+| Write or expand tests | "Write unit tests for src/core/ with >80% coverage" |
+| Code review | `codex review` on any branch |
+| Bug fix with clear repro steps | "Fix the off-by-one error in pagination — see issue #12" |
+| Generate boilerplate / scaffolding | "Create the REST endpoints matching the OpenAPI spec" |
+| Data processing pipeline | "Parse CSV files in data/ and output normalized JSON to results/" |
+| Documentation from code | "Generate API docs for all public functions in src/" |
+
+### You (Claude Code) — handle interactively
+
+Your strengths: interactive steering, web search, multi-tool workflows, accumulates context across a conversation, slash commands and MCP integrations, strong multi-step reasoning where each step depends on the previous.
+
+| Task Type | Example |
+|---|---|
+| Architecture and design | "Let's figure out the module structure" |
+| Research and exploration | "What libraries exist for X? Compare trade-offs." |
+| Complex multi-file refactors | "Restructure the data layer — I'll steer as we go" |
+| Debugging tricky issues | "This test fails intermittently — let's investigate" |
+| Planning and task decomposition | "Here's what I want to build — help me break it down" |
+| Synthesis across workstreams | "Review what all workers produced and integrate" |
+
+### Human-Only
+
+| Task Type | Example |
+|---|---|
+| Irreversible actions | Deploying to production, deleting infrastructure |
+| Security-sensitive operations | Managing secrets, access controls |
+| External communications | Sending emails, posting to external services |
+| Gate approvals (G0-G4) | Reviewing and approving at checkpoints |
+
+### Decision Heuristic
+
+```
+Can I write clear acceptance criteria? ──yes──→ Codex (dispatch it)
+                │
+                no
+                │
+        Does the human need to steer? ──yes──→ You (interactively)
+                │
+                no
+                │
+        Is it irreversible or sensitive? ──yes──→ Human-Only
+                │
+                no
+                │
+        Default → Codex (write better acceptance criteria)
+```
+
+**Second opinion pattern:** For important decisions, run both you and Codex independently and compare outputs. Note this in the task: "Run as second-opinion — compare with [other task ID]."
 
 ## Work Modes
 
