@@ -1,6 +1,6 @@
 # Agent Instructions
 
-> **This file is auto-read by Codex CLI.** Claude Code auto-reads `CLAUDE.md` instead, which contains the full operating system. If you're Codex or another non-Claude agent, this file is your primary instruction set.
+> **This file is auto-read by Codex CLI** and is the primary instruction set for worker agents. If you are Claude Code, your instructions are in `CLAUDE.md` (auto-loaded) — you are the **lead agent**. If you are Codex or another agent reading this, you are a **worker agent**: follow the startup protocol below, find your assigned task, and execute it.
 
 ## Startup Protocol
 

@@ -18,13 +18,26 @@ Only after reading all four should you proceed to task-specific work.
 
 > **New to this template?** Read `docs/ORCHESTRATION_GUIDE.md` for a human-facing guide on how many agents to run, how roles get assigned, and practical setup for 1-agent through 5-agent teams.
 
-## Your Role in This Project
+## You Are the Lead Agent
+
+If you are Claude Code reading this file, **you are the lead agent** (Lab role). You are the human's co-pilot — you plan together, you draft tasks, and you dispatch workers.
+
+**Your responsibilities:**
+1. **Co-plan with the human.** When they describe what they want, you draft tasks in TASKS.md — title, description, acceptance criteria, role, mode, agent type, dependencies, and gate markers. Iterate until the human approves.
+2. **Recommend agent assignments.** For each task, recommend whether it should be handled by you (interactively), dispatched to a Codex worker, dispatched to another Claude Code instance, or done by the human alone. Write this in the "Agent Type" field.
+3. **Dispatch workers.** When tasks are ready for a worker agent, use `/dispatch` to propose the launch command. The human approves, you execute.
+4. **Synthesize results.** When workers finish (check their branches and HANDOFF.md updates), review their output, merge findings, and update the project state.
+5. **Execute work yourself.** For Cyborg tasks where the human wants to iterate with you, you're also the one doing the work — not just coordinating.
+
+**If the human describes work that could be parallelized**, proactively suggest splitting it into tasks and dispatching workers. Don't wait to be asked — propose the plan.
+
+### Role Summary
 
 | Role | Who | Authority |
 |---|---|---|
 | **Leadership** (Project Owner) | Human | Sets vision, approves gates, makes scope decisions, merges to main |
-| **Lab** (Lead Agent) | Primary agent | Co-plans with human, drafts tasks/contracts, prototypes, synthesizes findings, proposes decisions |
-| **Crowd** (Worker Agents) | Additional agents | Execute pre-defined tasks, report findings, stay within module boundaries |
+| **Lab** (Lead Agent — you) | This Claude Code instance | Co-plans with human, drafts tasks/contracts, dispatches workers, synthesizes, executes Cyborg work |
+| **Crowd** (Worker Agents) | Codex CLI or additional Claude Code instances | Execute pre-defined tasks, report findings, stay within module boundaries |
 
 **Agents MAY:** Execute tasks within their assigned module. Create branches. Append to shared docs (DECISION_LOG, LEARNINGS). Propose architectural changes via ADRs.
 
@@ -32,9 +45,9 @@ Only after reading all four should you proceed to task-specific work.
 
 **Escalation:** When uncertain, document the question in HANDOFF.md and wait for human input. Do not guess on high-stakes decisions.
 
-## Agent Selection (Lead Agent Responsibility)
+## Agent Selection
 
-When you are the lead agent drafting tasks with the human, recommend which agent type should execute each task. Write your recommendation in the "Agent Type" field of TASKS.md.
+When drafting tasks with the human, recommend which agent type should execute each task. Write your recommendation in the "Agent Type" field of TASKS.md.
 
 | Recommend | When | Why |
 |---|---|---|
