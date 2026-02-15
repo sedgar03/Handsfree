@@ -24,12 +24,10 @@ If you are Claude Code reading this file, **you are the lead agent** (Lab role).
 
 **Your responsibilities:**
 1. **Co-plan with the human.** When they describe what they want, you draft tasks in TASKS.md — title, description, acceptance criteria, role, mode, agent type, dependencies, and gate markers. Iterate until the human approves.
-2. **Recommend agent assignments.** For each task, recommend whether it should be handled by you (interactively), dispatched to a Codex worker, dispatched to another Claude Code instance, or done by the human alone. Write this in the "Agent Type" field.
-3. **Dispatch workers.** When tasks are ready for a worker agent, use `/dispatch` to propose the launch command. The human approves, you execute.
+2. **Dispatch to Codex by default.** Most implementation work should go to Codex workers via `/dispatch`. Your job is to write crisp task specs, not to do all the coding yourself. Think of yourself as the tech lead who writes the ticket, not the developer who picks it up.
+3. **Use `/dispatch` proactively.** When tasks are ready, propose the launch command. The human approves, you execute. If the human describes work that could be parallelized, suggest splitting it into tasks and dispatching multiple Codex workers.
 4. **Synthesize results.** When workers finish (check their branches and HANDOFF.md updates), review their output, merge findings, and update the project state.
-5. **Execute work yourself.** For Cyborg tasks where the human wants to iterate with you, you're also the one doing the work — not just coordinating.
-
-**If the human describes work that could be parallelized**, proactively suggest splitting it into tasks and dispatching workers. Don't wait to be asked — propose the plan.
+5. **Work interactively on what needs you.** For Cyborg tasks — ambiguous, creative, exploratory work where the human wants to iterate — you do the work directly. Everything else, dispatch.
 
 ### Role Summary
 
@@ -49,15 +47,18 @@ If you are Claude Code reading this file, **you are the lead agent** (Lab role).
 
 When drafting tasks with the human, recommend which agent type should execute each task. Write your recommendation in the "Agent Type" field of TASKS.md.
 
+**Default to Codex.** You (Claude Code) are already here as the lead agent — you handle planning, coordination, and interactive work. Most execution tasks should be dispatched to Codex via `/dispatch`. Only keep work in Claude Code when it genuinely needs interactive human-agent iteration.
+
 | Recommend | When | Why |
 |---|---|---|
-| **Claude Code** | Cyborg tasks, ambiguous requirements, tasks needing iteration, research/exploration, multi-file refactors | Interactive — human can steer mid-task. Best for work that needs judgment calls and back-and-forth. |
-| **Codex CLI** | Centaur tasks, clear acceptance criteria, well-defined scope, isolated modules, code review | Autonomous — runs independently and delivers. Best for "here's the spec, go build it" work. Also has a dedicated `codex review` command. |
+| **Codex CLI** (default) | Implementation tasks, well-scoped features, bug fixes, tests, code review, isolated modules, any task with clear acceptance criteria | Your go-to worker. Runs autonomously, delivers results, has dedicated `codex review`. Dispatch via `/dispatch` and move on to the next thing. |
+| **Claude Code worker** | Tasks requiring multi-step exploration where the path isn't clear upfront, complex refactors touching many files with judgment calls mid-task | Only when a task genuinely can't be specified upfront. Ask yourself: "Can I write clear acceptance criteria?" If yes → Codex. |
+| **You (lead, interactively)** | Cyborg tasks the human wants to co-create, planning sessions, synthesis across workstreams, ambiguous/creative work | This is your primary mode — working with the human, not executing alone. |
 | **Human-Only** | Irreversible actions, security-sensitive operations, external communications, final approvals | Agent prepares materials but human executes. Gates (G0-G4) are always human-only. |
 
-**When in doubt, recommend Claude Code.** It's more flexible. Codex is the better choice only when the task is crisply defined and the agent won't need to ask questions.
+**The decision heuristic:** Can I write acceptance criteria for this task? → **Codex.** Does the human need to steer mid-task? → **You, interactively.** Is it irreversible? → **Human-Only.**
 
-**Second opinion pattern:** For important decisions, recommend running both agents independently and comparing outputs. Note this in the task: "Run as second-opinion — compare with [other task ID]."
+**Second opinion pattern:** For important decisions, recommend running both you and Codex independently and comparing outputs. Note this in the task: "Run as second-opinion — compare with [other task ID]."
 
 ## Work Modes
 
