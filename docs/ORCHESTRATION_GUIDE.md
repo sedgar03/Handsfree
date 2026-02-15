@@ -197,3 +197,70 @@ If task B depends on task A's output, run them sequentially. Parallel agents wor
 - **Claude Code** is better for interactive/Cyborg work — you and the agent iterate together
 - **Codex** is better for well-defined Centaur tasks — clear input, clear acceptance criteria, agent runs and delivers
 - Use both: Claude Code for the lead agent role, Codex for worker tasks with crisp specs
+
+## How Codex CLI Integrates
+
+### What Codex auto-reads
+
+Codex CLI auto-reads `AGENTS.md` in the project root — that's its equivalent of Claude Code's `CLAUDE.md`. Our `AGENTS.md` is structured so Codex gets:
+
+1. **Startup protocol** — tells it to read CLAUDE.md, PROJECT_CHARTER, HANDOFF, WORKSTREAMS, then find its task
+2. **Key rules** — quick-reference guardrails (never merge to main, respect module ownership, etc.)
+3. **Coordination protocol** — how to work alongside other agents
+
+The project also includes `.codex/config.toml` with `project_doc_fallback_filenames = ["CLAUDE.md"]`, so Codex reads the master doc too if `AGENTS.md` alone isn't enough context.
+
+### Launching Codex as a worker
+
+After you and your lead agent (Claude Code) have prepared tasks in TASKS.md:
+
+```bash
+# Autonomous worker — executes a pre-defined task
+codex --full-auto -C /path/to/project \
+  "You are agent codex-1. Follow the startup protocol in AGENTS.md. \
+   Work on task T004 in TASKS.md. When done, update docs/HANDOFF.md \
+   and commit to branch work/codex-1/T004."
+```
+
+```bash
+# Interactive worker — you supervise Codex on a task
+codex -C /path/to/project \
+  "You are agent codex-1. Follow the startup protocol in AGENTS.md. \
+   Work on task T004 in TASKS.md."
+```
+
+### Using Codex as a second opinion
+
+You don't always need Codex as a parallel worker. It's also valuable as a **reviewer or alternative perspective** on work Claude Code has done:
+
+```bash
+# Code review — Codex reviews Claude's branch
+codex review -C /path/to/project
+
+# Second opinion on a design decision
+codex -C /path/to/project \
+  "Read docs/adr/003-caching-strategy.md. Do you agree with this \
+   architecture decision? What risks or alternatives were missed? \
+   Write your analysis to docs/LEARNINGS.md as a new entry."
+
+# Alternative implementation — same task, different agent
+codex -C /path/to/project \
+  "Read TASKS.md task T005. Claude Code produced one implementation \
+   on branch work/claude-1/T005. Without looking at that branch, \
+   produce your own implementation on branch work/codex-1/T005-alt. \
+   The human will compare both approaches."
+```
+
+This "second opinion" pattern is lightweight — no coordination protocol needed, no module ownership. Just point Codex at the same repo and ask it to evaluate or re-attempt.
+
+### What Codex can and can't do vs Claude Code
+
+| Capability | Claude Code | Codex CLI |
+|---|---|---|
+| Auto-reads instructions | `CLAUDE.md` | `AGENTS.md` |
+| Custom slash commands | Yes (`.claude/commands/`) | No — use prompt text instead |
+| `/start-session` equivalent | Built-in | Include startup instructions in your launch prompt |
+| Interactive co-creation | Yes (Cyborg mode) | Yes, but less fluid — better for Centaur tasks |
+| `codex review` | No built-in | Yes — dedicated review subcommand |
+| Sandbox modes | Configurable permissions | `read-only`, `workspace-write`, `danger-full-access` |
+| Background execution | `--print` flag | `codex exec` for non-interactive runs |

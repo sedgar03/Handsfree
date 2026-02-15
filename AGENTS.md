@@ -1,8 +1,35 @@
-# Multi-Agent Coordination Protocol
+# Agent Instructions & Coordination Protocol
 
-This document governs how multiple agents (Claude Code, Codex, humans) work in parallel on this project without conflicts.
+> **This file is auto-read by Codex CLI.** Claude Code auto-reads `CLAUDE.md` instead, which contains the full operating system. If you're Codex or another non-Claude agent, this file is your primary instruction set.
 
-> **First time?** Read `docs/ORCHESTRATION_GUIDE.md` for a practical walkthrough of how to set up and launch agents — from solo to 5-agent teams.
+## Startup Protocol (All Agents)
+
+Before doing any work, read these files in order:
+
+1. **`CLAUDE.md`** — Master operating doc: mission, guardrails, conventions, review gates
+2. **`docs/PROJECT_CHARTER.md`** — Strategic context: vision, hypothesis, success criteria, scope
+3. **`docs/HANDOFF.md`** — Operational context: what just happened, what's next, blockers
+4. **`docs/WORKSTREAMS.md`** — Who is working on what, current status
+5. **`TASKS.md`** — Find your assigned task (search for your agent ID)
+
+Then begin work on your assigned task. If no task is assigned to you, report back and wait.
+
+## Key Rules (Quick Reference)
+
+These are extracted from CLAUDE.md. Read the full version for details.
+
+- **Never** merge to `main` — only humans merge
+- **Never** modify files owned by another agent (check Module Ownership below)
+- **Never** skip a `[GATE]` checkpoint — stop and wait for human approval
+- **Always** update `docs/HANDOFF.md` before ending your session
+- **Always** work on a branch: `work/<your-agent-id>/<task-id>`
+- **Always** commit with format: `[workstream] action: description`
+
+## Coordination Protocol
+
+This section governs how multiple agents (Claude Code, Codex, humans) work in parallel without conflicts.
+
+> **Human project owners:** Read `docs/ORCHESTRATION_GUIDE.md` for a practical walkthrough of how to set up and launch agents — from solo to 5-agent teams.
 
 ## Agent Registry
 
