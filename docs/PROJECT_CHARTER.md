@@ -1,4 +1,4 @@
-# Project Charter — ClaudeVoice
+# Project Charter — Handsfree
 
 ## Vision
 
@@ -174,9 +174,10 @@ This adds ~1-2s latency (API call) but produces much better summaries than heuri
 
 ### Components
 
+This is a flat repo with scripts — not a Python package. Hooks point directly to scripts via absolute paths. Iterate fast, package later.
+
 ```
-src/claudevoice/
-  __init__.py
+src/
   tts.py             — Kokoro TTS wrapper (queue, play, device routing)
   stt.py             — lightning-whisper-mlx wrapper
   summarizer.py      — claude -p summarization with verbosity levels
@@ -186,13 +187,49 @@ src/claudevoice/
   audio.py           — Audio device discovery + routing (AirPods detection)
   config.py          — Read/write ~/.claude/voice-config.json
   queue.py           — TTS audio queue (FIFO, non-blocking)
-  hooks/
-    handsfree_hook.py — Main hook script (reads stdin JSON, summarizes, speaks)
-    install.py        — Installs/removes hooks from Claude Code settings
+hooks/
+  handsfree_hook.py  — Main hook script (reads stdin JSON, summarizes, speaks)
+  install.py         — Adds/removes hook entries in Claude Code settings.json
 scripts/
-  download_models.py  — Downloads Kokoro + Whisper models
-  install.sh          — One-command setup
+  download_models.py — Downloads Kokoro + Whisper models
+  setup.sh           — One-command setup (deps + models + hooks)
+models/              — Downloaded models live here (gitignored)
 ```
+
+### How hooks connect to the repo
+
+The install script adds entries to `~/dotfiles/claude/settings.json` with absolute paths:
+
+```json
+{
+  "type": "command",
+  "command": "/Users/steven_edgar/Code/Handsfree/hooks/handsfree_hook.py",
+  "async": true
+}
+```
+
+Each hook script uses a shebang with `uv run` to manage its own deps inline:
+
+```python
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["kokoro-onnx"]
+# ///
+```
+
+This way: no venv activation needed, no package install, hooks just work. `uv` handles deps on first run and caches them.
+
+### What lives outside the repo
+
+Only lightweight toggle/config files:
+- `~/.claude/handsfree` — mode toggle (touch/rm)
+- `~/.claude/voice-config.json` — verbosity, input mode, voice selection
+- Hook entries in `~/dotfiles/claude/settings.json` — installed by `scripts/setup.sh`
+
+### Future: packaging
+
+Once the MVP is proven, package as `uv tool install handsfree`. Hooks would reference `handsfree-hook` on PATH instead of absolute paths. But that's a later concern.
 
 ## Tech Stack
 

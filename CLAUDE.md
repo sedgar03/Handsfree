@@ -1,8 +1,8 @@
-# ClaudeVoice — Agent Operating System
+# Handsfree — Agent Operating System
 
 ## Mission
 
-Build a hands-free voice layer for Claude Code. Local Kokoro TTS speaks summaries of what Claude is doing through AirPods. Local Whisper STT lets you talk back via AirPod stem-click. No paid APIs. The goal is productive "walk around" coding sessions where you stay in the loop without being at your desk.
+Build a hands-free voice layer for Claude Code. Local Kokoro TTS speaks summaries of what Claude is doing through AirPods. Local Whisper STT lets you talk back via AirPod stem-click or global hotkey. The goal is productive "walk around" coding sessions where you stay in the loop without being at your desk. This is a living repo — iterate fast, package later once the MVP is proven.
 
 ## Mandatory Startup Protocol
 
@@ -247,25 +247,22 @@ Only fall back to free-text when the question is genuinely open-ended (e.g., "de
 ## Build / Test / Lint Commands
 
 ```bash
-# Install dependencies
-uv sync
+# Setup everything (deps, models, hooks)
+./scripts/setup.sh
 
-# Test
+# Test TTS (speak a test phrase)
+uv run src/tts.py "Hello from Handsfree"
+
+# Test STT (record and transcribe)
+uv run src/stt.py
+
+# Run tests
 uv run pytest tests/
-
-# Lint
-uv run ruff check src/
-
-# Run TTS test (speak a test phrase)
-uv run python -m claudevoice.tts "Hello from ClaudeVoice"
-
-# Run STT test (record and transcribe)
-uv run python -m claudevoice.stt
 ```
 
 ## Architecture Overview
 
-See `docs/PROJECT_CHARTER.md` for the full architecture diagram. In short: Claude Code hooks trigger Python scripts that summarize output and speak it via Kokoro TTS. A background listener detects AirPod stem-clicks via macOS media key events, captures mic audio, transcribes via faster-whisper, and feeds text back to Claude.
+See `docs/PROJECT_CHARTER.md` for the full architecture diagram. In short: Claude Code hooks trigger Python scripts in `hooks/` that summarize output via `claude -p` and speak it via Kokoro TTS. A background listener detects AirPod stem-clicks or hotkey presses, captures mic audio, transcribes via lightning-whisper-mlx, and feeds text back to Claude. Everything is flat scripts with inline `uv` deps — no package install needed.
 
 ## Key Gotchas
 

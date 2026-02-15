@@ -1,65 +1,69 @@
-# ClaudeVoice
+# Handsfree
 
-> Hands-free voice layer for Claude Code. Walk away from your desk with AirPods — Claude speaks summaries of what it's doing, you tap to talk back. Fully local, no paid APIs.
+> Walk away from your desk with AirPods. Claude speaks summaries of what it's doing, you tap to talk back. Fully local TTS/STT, no paid APIs.
 
 ## Quick Start
 
 ```bash
-# Clone and enter project
-git clone <repo-url>
-cd ClaudeVoice
+cd ~/Code/Handsfree
 
-# Install dependencies (requires uv)
-uv sync
+# Setup: install deps, download models, configure hooks
+./scripts/setup.sh
 
-# Download models (Kokoro TTS + Whisper)
-uv run python scripts/download_models.py
+# Enable handsfree mode
+touch ~/.claude/handsfree
 
-# Install Claude Code hooks
-uv run python scripts/install_hooks.py
-
-# Test TTS
-uv run python -m claudevoice.tts "Hello from ClaudeVoice"
+# Disable handsfree mode
+rm ~/.claude/handsfree
 ```
 
 ## How It Works
 
-**Claude → You (TTS):** Claude Code hooks fire when Claude stops, needs permission, or compacts. A summarizer extracts key info from the hook JSON and speaks it through Kokoro TTS to your AirPods.
+**Claude → You (TTS):** Claude Code hooks fire when Claude stops or needs input. A `claude -p` call summarizes the response, then Kokoro TTS speaks it through your AirPods.
 
-**You → Claude (STT):** A background listener detects AirPod stem-clicks via macOS media key events. When you tap, it captures mic audio, transcribes it locally with Whisper, and sends the text to Claude.
+**You → Claude (STT):** Tap your AirPod stem (or press a hotkey). A listener captures mic audio, transcribes it locally with Whisper, and sends the text to Claude.
 
-## Toggle
+**Handsfree mode** layers on top of your existing setup. AOE sound effects still play on your computer. Voice output routes to AirPods. Toggle it with a file, just like `~/.claude/mute`.
 
-```bash
-touch ~/.claude/voice-mute    # Mute voice
-rm ~/.claude/voice-mute       # Unmute voice
+## Config
+
+Edit `~/.claude/voice-config.json`:
+
+```json
+{
+  "input_mode": "stem-click",
+  "verbosity": "detailed",
+  "kokoro_voice": "af_heart",
+  "hotkey": "F18"
+}
+```
+
+- `input_mode`: `"stem-click"` or `"hotkey"`
+- `verbosity`: `"terse"` (1 sentence) or `"detailed"` (2-3 sentences with file names)
+- `kokoro_voice`: Kokoro voice ID
+- `hotkey`: key for hotkey mode
+
+## Project Structure
+
+```
+hooks/             — Claude Code hook scripts (pointed to by settings.json)
+src/               — Core modules (TTS, STT, summarizer, listeners, audio)
+scripts/           — Setup and model download scripts
+models/            — Downloaded models (gitignored)
+docs/              — Charter, handoff, decisions, learnings
+tests/             — Test suite
 ```
 
 ## Tech Stack
 
 | Component | Tool |
 |---|---|
-| TTS | Kokoro (local ONNX) / macOS `say` fallback |
-| STT | faster-whisper (local) |
-| Media keys | PyObjC CGEventTap |
+| TTS | Kokoro (kokoro-onnx) / macOS `say` fallback |
+| STT | lightning-whisper-mlx (whisper-large-v3-turbo) |
+| Summarization | `claude -p` with tuned prompts |
+| Input | AirPod stem-click (PyObjC) or global hotkey |
 | Audio | sounddevice |
-| Language | Python 3.11+ / uv |
-
-## Project Structure
-
-```
-CLAUDE.md          — Agent operating system (AI reads this first)
-docs/              — Project charter, handoff, decisions, learnings
-src/claudevoice/   — Source code
-  tts.py           — Kokoro TTS engine
-  stt.py           — Whisper STT engine
-  summarizer.py    — Hook JSON → spoken summary
-  stem_listener.py — AirPod stem-click detection
-  audio.py         — Audio device routing
-  hooks/           — Claude Code hook scripts
-tests/             — Test suite
-scripts/           — Setup and install scripts
-```
+| Deps | uv (inline script dependencies, no venv needed) |
 
 ## Status
 

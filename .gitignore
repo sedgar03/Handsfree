@@ -52,3 +52,6 @@ yarn-error.log*
 
 # Logs
 *.log
+models/
+*.pyc
+__pycache__/
