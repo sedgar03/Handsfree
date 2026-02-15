@@ -9,6 +9,7 @@
   - [ ] Module map documented in `src/README.md`
   - [ ] Interface contracts defined in `docs/contracts/`
 - **Assigned:** _unassigned_
+- **Agent Type:** Claude Code — ambiguous/creative work, needs human iteration
 - **Mode:** Cyborg
 - **Role:** You are a senior software architect responsible for designing a clean, modular system that balances simplicity with extensibility.
 - **Priority:** High
@@ -22,6 +23,7 @@
   - [ ] Unit tests passing with >80% coverage
   - [ ] Integration points stubbed for dependent modules
 - **Assigned:** _unassigned_
+- **Agent Type:** Codex — clear spec, isolated module, autonomous execution
 - **Mode:** Centaur
 - **Role:** You are a senior developer responsible for writing clean, well-tested production code.
 - **Priority:** High
@@ -38,6 +40,7 @@
   - [ ] Build/test/lint commands working
   - [ ] Initial architecture documented
 - **Assigned:** `human-1`
+- **Agent Type:** Claude Code — interactive setup with lead agent
 - **Mode:** Cyborg
 - **Role:** Project owner performing initial setup with AI assistance.
 - **Priority:** Critical

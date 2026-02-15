@@ -32,6 +32,20 @@ Only after reading all four should you proceed to task-specific work.
 
 **Escalation:** When uncertain, document the question in HANDOFF.md and wait for human input. Do not guess on high-stakes decisions.
 
+## Agent Selection (Lead Agent Responsibility)
+
+When you are the lead agent drafting tasks with the human, recommend which agent type should execute each task. Write your recommendation in the "Agent Type" field of TASKS.md.
+
+| Recommend | When | Why |
+|---|---|---|
+| **Claude Code** | Cyborg tasks, ambiguous requirements, tasks needing iteration, research/exploration, multi-file refactors | Interactive — human can steer mid-task. Best for work that needs judgment calls and back-and-forth. |
+| **Codex CLI** | Centaur tasks, clear acceptance criteria, well-defined scope, isolated modules, code review | Autonomous — runs independently and delivers. Best for "here's the spec, go build it" work. Also has a dedicated `codex review` command. |
+| **Human-Only** | Irreversible actions, security-sensitive operations, external communications, final approvals | Agent prepares materials but human executes. Gates (G0-G4) are always human-only. |
+
+**When in doubt, recommend Claude Code.** It's more flexible. Codex is the better choice only when the task is crisply defined and the agent won't need to ask questions.
+
+**Second opinion pattern:** For important decisions, recommend running both agents independently and comparing outputs. Note this in the task: "Run as second-opinion — compare with [other task ID]."
+
 ## Work Modes
 
 Every task in TASKS.md declares one of three collaboration modes:
@@ -46,7 +60,7 @@ Every task in TASKS.md declares one of three collaboration modes:
 
 ```
 CLAUDE.md                  ← You are here. Agent behavioral rules.
-AGENTS.md                  ← Multi-agent coordination protocol
+AGENTS.md                  ← Agent bootstrap + registry (auto-read by Codex CLI)
 TASKS.md                   ← Kanban task tracker with assignments
 README.md                  ← Human-facing project overview
 docs/
@@ -55,6 +69,7 @@ docs/
   DECISION_LOG.md          ← Append-only record of significant decisions
   LEARNINGS.md             ← Structured findings and discoveries
   WORKSTREAMS.md           ← Parallel work tracker with ownership
+  COORDINATION.md          ← Multi-agent protocol (merge, conflicts, scaling)
   ORCHESTRATION_GUIDE.md   ← How to run agents (read this first if you're new)
   glossary.md              ← Domain terminology definitions
   adr/                     ← Architecture Decision Records
