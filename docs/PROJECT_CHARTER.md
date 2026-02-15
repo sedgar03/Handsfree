@@ -149,27 +149,39 @@ This adds ~1-2s latency (API call) but produces much better summaries than heuri
 
 ## Architecture Overview
 
+### Phase 1: Mac speakers + built-in mic
+
 ```
 ┌──────────────────────────────────────────────────────────┐
 │                    Claude Code CLI                        │
 │                                                           │
 │  Hooks (output — Claude speaks to you):                   │
-│   Stop ──┬──→ notify-sound.sh (AOE → speakers, as-is)    │
-│          └──→ handsfree-hook.sh                           │
+│   Stop ──┬──→ notify-sound.sh (AOE sound, as-is)         │
+│          └──→ handsfree_hook.py                           │
 │                 ├─ claude -p "summarize..." → summary text│
 │                 ├─ kokoro_tts(summary) → audio            │
-│                 └─ queue + play → AirPods                 │
+│                 └─ queue + play → Mac speakers             │
 │                                                           │
 │   Notification ──→ same pattern (permission/idle prompts) │
 │   PreCompact ──→ same pattern (wololo + voice summary)    │
 │                                                           │
 │  Input (you speak to Claude):                             │
-│   AirPod stem OR hotkey                                   │
+│   Global hotkey (e.g. F18)                                │
 │     └──→ listener daemon                                  │
-│           ├─ sounddevice mic capture                      │
+│           ├─ sounddevice → built-in mic                   │
 │           ├─ lightning-whisper-mlx STT                    │
 │           └─ inject text → Claude Code stdin              │
 └──────────────────────────────────────────────────────────┘
+```
+
+### Phase 2: AirPods (adds Bluetooth routing + stem-click)
+
+```
+  Phase 1 components, plus:
+  - audio.py routes TTS output → AirPods (via CoreAudio device selection)
+  - audio.py routes mic input ← AirPod mic
+  - stem_listener.py detects AirPod stem tap (via CGEventTap media keys)
+  - listener.py switches between hotkey and stem-click based on config
 ```
 
 ### Components
@@ -252,26 +264,44 @@ Once the MVP is proven, package as `uv tool install handsfree`. Hooks would refe
 
 ## Milestones
 
+Build in layers — prove each piece works on default Mac audio before adding Bluetooth complexity.
+
+### Phase 1: Mac speakers + built-in mic (prove the loop)
+
 | Milestone | Gate | Deliverables |
 |---|---|---|
-| Project kickoff | G0 | Charter approved, architecture defined, models selected |
-| TTS pipeline working | G1 | Hook → `claude -p` summarize → Kokoro → AirPods plays audio |
-| STT pipeline working | G2 | Stem click or hotkey → mic → Whisper → text output |
-| Full loop integration | G3 | Claude speaks, user responds via voice, Claude hears |
-| Polish and install script | G4 | One-command setup, README, verbosity tuning, edge cases |
+| Project kickoff | G0 | Charter approved, architecture defined |
+| TTS on Mac speakers | G1 | Hook → `claude -p` summarize → Kokoro → Mac speakers |
+| STT from Mac mic | G2 | Global hotkey → built-in mic → Whisper → text output |
+| Full loop on Mac | G3 | Claude speaks through speakers, you talk back via hotkey + mic |
+
+### Phase 2: AirPods (add Bluetooth routing)
+
+| Milestone | Gate | Deliverables |
+|---|---|---|
+| Audio routing to AirPods | G4 | TTS output routes to AirPods, mic captures from AirPod mic |
+| Stem-click detection | G5 | AirPod stem tap triggers recording (alternative to hotkey) |
+| Polish and install script | G6 | One-command setup, README, verbosity tuning, edge cases |
 
 ## Risk Register
+
+### Phase 1 risks (Mac-native)
 
 | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|
 | `claude -p` summarization latency too high | Medium | Medium | Pre-format hook JSON to minimize tokens; use haiku model flag if available; fall back to heuristic extraction |
-| AirPod stem-click detection unreliable | Medium | High | Global hotkey as equal-citizen alternative; both available, user picks |
 | Kokoro TTS latency too high on CPU | Low | High | Pre-warm model; macOS `say` as instant fallback; test on M-series |
 | Whisper accuracy poor for code terms | Medium | Medium | whisper-large-v3-turbo has good vocabulary; add initial_prompt with common terms |
-| Audio routing to AirPods flaky | Medium | Medium | Use CoreAudio APIs to explicitly enumerate and select Bluetooth device |
 | Hook JSON structure changes across Claude Code versions | Low | Medium | Defensive parsing; extract just the text content field |
 | TTS queue grows too long during rapid Claude activity | Low | Low | Max queue depth (e.g., 3); drop oldest if exceeded |
 | `claude -p` costs add up | Low | Low | Summarization uses small token counts; haiku-tier if possible |
+
+### Phase 2 risks (AirPods — deferred)
+
+| Risk | Likelihood | Impact | Mitigation |
+|---|---|---|---|
+| AirPod stem-click detection unreliable | Medium | High | Global hotkey remains available as fallback |
+| Audio routing to AirPods flaky | Medium | Medium | Use CoreAudio APIs to explicitly enumerate and select Bluetooth device |
 
 ## Open Questions (Resolved)
 
