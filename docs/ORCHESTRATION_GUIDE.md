@@ -2,6 +2,23 @@
 
 > This guide is for the human project owner. It explains what to run, how many agents, and how coordination actually works in practice.
 
+## Prerequisites
+
+Install the agent CLIs you plan to use. You only need the ones relevant to your setup.
+
+| Agent Type | Install | Authenticate | Docs |
+|---|---|---|---|
+| **Claude Code** | `npm install -g @anthropic-ai/claude-code` | Runs auth flow on first launch | [claude.ai/claude-code](https://claude.ai/claude-code) |
+| **Codex CLI** | `npm install -g @openai/codex` | `codex auth` or set `OPENAI_API_KEY` | [github.com/openai/codex](https://github.com/openai/codex) |
+
+**Verify installation:**
+```bash
+claude --version   # Claude Code
+codex --version    # Codex CLI
+```
+
+**Other agent types:** Any tool that can read files and write to a git branch works with this template. The coordination is file-based, so the agent just needs filesystem access and the ability to follow written instructions (CLAUDE.md, TASKS.md). Future CLI agents slot in the same way — install, authenticate, point at the repo.
+
 ## The Mental Model
 
 You are a **manager running a small team**. The agents are your reports. They don't talk to each other directly — they coordinate through shared documents, just like an async remote team using a shared wiki. Your job is to:
