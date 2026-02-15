@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash(codex *)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/dispatch-notify.sh",
+            "async": true
+          }
+        ]
+      },
+      {
+        "matcher": "Bash(claude --print*)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/dispatch-notify.sh",
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -84,6 +84,16 @@ research/
   hypotheses/              ← Formal hypothesis documents
 ```
 
+## Custom Commands
+
+- `/start-session` — Reads charter, handoff, workstreams, tasks. Outputs briefing. Asks what to work on.
+- `/end-session` — Updates handoff, learnings, workstreams, tasks. Commits.
+- `/dispatch` — Proposes launching a worker agent (Codex or Claude Code) for a task. Shows the command, waits for approval, then executes. Plays a notification sound on dispatch.
+- `/log-decision` — Appends a formatted entry to DECISION_LOG.md.
+- `/new-workstream` — Adds an entry to WORKSTREAMS.md.
+
+**Dispatch sound:** When `/dispatch` launches an agent, the AOE2 "farm exhausted" sound plays as confirmation. Mute with `touch ~/.claude/mute`, unmute with `rm ~/.claude/mute`.
+
 ## Agent Protocol
 
 ### 1. Start
