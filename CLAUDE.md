@@ -16,13 +16,15 @@ Every session (Claude Code, Codex, or human) MUST read these files in order befo
 
 Only after reading all four should you proceed to task-specific work.
 
+> **New to this template?** Read `docs/ORCHESTRATION_GUIDE.md` for a human-facing guide on how many agents to run, how roles get assigned, and practical setup for 1-agent through 5-agent teams.
+
 ## Your Role in This Project
 
 | Role | Who | Authority |
 |---|---|---|
 | **Leadership** (Project Owner) | Human | Sets vision, approves gates, makes scope decisions, merges to main |
-| **Lab** (Lead Agent) | Primary agent | Prototypes, distributes work, synthesizes findings, proposes decisions |
-| **Crowd** (Worker Agents) | Additional agents | Execute assigned tasks, report findings, stay within module boundaries |
+| **Lab** (Lead Agent) | Primary agent | Co-plans with human, drafts tasks/contracts, prototypes, synthesizes findings, proposes decisions |
+| **Crowd** (Worker Agents) | Additional agents | Execute pre-defined tasks, report findings, stay within module boundaries |
 
 **Agents MAY:** Execute tasks within their assigned module. Create branches. Append to shared docs (DECISION_LOG, LEARNINGS). Propose architectural changes via ADRs.
 
@@ -53,6 +55,7 @@ docs/
   DECISION_LOG.md          ← Append-only record of significant decisions
   LEARNINGS.md             ← Structured findings and discoveries
   WORKSTREAMS.md           ← Parallel work tracker with ownership
+  ORCHESTRATION_GUIDE.md   ← How to run agents (read this first if you're new)
   glossary.md              ← Domain terminology definitions
   adr/                     ← Architecture Decision Records
   contracts/               ← Interface contracts between modules

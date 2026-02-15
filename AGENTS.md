@@ -2,6 +2,8 @@
 
 This document governs how multiple agents (Claude Code, Codex, humans) work in parallel on this project without conflicts.
 
+> **First time?** Read `docs/ORCHESTRATION_GUIDE.md` for a practical walkthrough of how to set up and launch agents — from solo to 5-agent teams.
+
 ## Agent Registry
 
 | Agent ID | Type | Module Assignment | Status |
