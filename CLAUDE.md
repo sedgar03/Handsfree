@@ -1,9 +1,8 @@
-# [PROJECT NAME] — Agent Operating System
+# ClaudeVoice — Agent Operating System
 
 ## Mission
 
-<!-- Replace with your project's one-paragraph thesis or hypothesis. This is the north star for all decisions. -->
-[One-paragraph mission statement. What are you building/investigating? Why does it matter? What does success look like?]
+Build a hands-free voice layer for Claude Code. Local Kokoro TTS speaks summaries of what Claude is doing through AirPods. Local Whisper STT lets you talk back via AirPod stem-click. No paid APIs. The goal is productive "walk around" coding sessions where you stay in the loop without being at your desk.
 
 ## Mandatory Startup Protocol
 
@@ -205,6 +204,21 @@ Examples:
 - Code: follow language conventions (snake_case for Python, camelCase for JS/TS, etc.)
 - Scripts: descriptive snake_case (e.g., `run_migrations.sh`)
 
+## Interaction Style
+
+**Use clickable menus, not free-text questions.** When proposing dispatch, task decisions, or any choice, ALWAYS use the `AskUserQuestion` tool with predefined selectable options. The human should be able to click an option, not type a response.
+
+Use `AskUserQuestion` for:
+- **Dispatch proposals:** "Which task should we dispatch?" → options are the pending tasks
+- **Agent type selection:** "Which agent for this task?" → Codex / Claude Code / Human-Only
+- **Task approval:** "Ready to dispatch T003?" → Dispatch now / Modify task / Skip
+- **Gate reviews:** "Approve Gate G2?" → Approve / Request changes / Defer
+- **Work mode decisions:** "How should we work on this?" → Centaur / Cyborg / Human-Only
+- **Architecture choices:** "Which approach?" → Option A / Option B / Need more research
+- **Next steps:** "What should we work on next?" → options from TASKS.md pending list
+
+Only fall back to free-text when the question is genuinely open-ended (e.g., "describe what you want to build").
+
 ## Guardrails
 
 - **Never** delete data files or results without explicit human approval
@@ -232,22 +246,26 @@ Examples:
 
 ## Build / Test / Lint Commands
 
-<!-- Fill per project -->
 ```bash
-# Build
-# TODO: Add build command
+# Install dependencies
+uv sync
 
 # Test
-# TODO: Add test command
+uv run pytest tests/
 
 # Lint
-# TODO: Add lint command
+uv run ruff check src/
+
+# Run TTS test (speak a test phrase)
+uv run python -m claudevoice.tts "Hello from ClaudeVoice"
+
+# Run STT test (record and transcribe)
+uv run python -m claudevoice.stt
 ```
 
 ## Architecture Overview
 
-<!-- Fill per project -->
-[Describe the high-level architecture here once the initial design is complete. Reference ADR-001 for the rationale.]
+See `docs/PROJECT_CHARTER.md` for the full architecture diagram. In short: Claude Code hooks trigger Python scripts that summarize output and speak it via Kokoro TTS. A background listener detects AirPod stem-clicks via macOS media key events, captures mic audio, transcribes via faster-whisper, and feeds text back to Claude.
 
 ## Key Gotchas
 

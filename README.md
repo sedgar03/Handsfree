@@ -1,52 +1,70 @@
-# [Project Name]
+# ClaudeVoice
 
-> [One-line description of what this project does and why it matters.]
+> Hands-free voice layer for Claude Code. Walk away from your desk with AirPods — Claude speaks summaries of what it's doing, you tap to talk back. Fully local, no paid APIs.
 
 ## Quick Start
 
 ```bash
 # Clone and enter project
 git clone <repo-url>
-cd <project-name>
+cd ClaudeVoice
 
-# Install dependencies
-# TODO: Add install command
+# Install dependencies (requires uv)
+uv sync
 
-# Run tests
-# TODO: Add test command
+# Download models (Kokoro TTS + Whisper)
+uv run python scripts/download_models.py
 
-# Start development
-# TODO: Add dev command
+# Install Claude Code hooks
+uv run python scripts/install_hooks.py
+
+# Test TTS
+uv run python -m claudevoice.tts "Hello from ClaudeVoice"
 ```
+
+## How It Works
+
+**Claude → You (TTS):** Claude Code hooks fire when Claude stops, needs permission, or compacts. A summarizer extracts key info from the hook JSON and speaks it through Kokoro TTS to your AirPods.
+
+**You → Claude (STT):** A background listener detects AirPod stem-clicks via macOS media key events. When you tap, it captures mic audio, transcribes it locally with Whisper, and sends the text to Claude.
+
+## Toggle
+
+```bash
+touch ~/.claude/voice-mute    # Mute voice
+rm ~/.claude/voice-mute       # Unmute voice
+```
+
+## Tech Stack
+
+| Component | Tool |
+|---|---|
+| TTS | Kokoro (local ONNX) / macOS `say` fallback |
+| STT | faster-whisper (local) |
+| Media keys | PyObjC CGEventTap |
+| Audio | sounddevice |
+| Language | Python 3.11+ / uv |
 
 ## Project Structure
 
 ```
 CLAUDE.md          — Agent operating system (AI reads this first)
-AGENTS.md          — Multi-agent coordination protocol
-TASKS.md           — Task tracker with assignments
-docs/              — Project documentation (charter, handoff, decisions, learnings)
-src/               — Source code
+docs/              — Project charter, handoff, decisions, learnings
+src/claudevoice/   — Source code
+  tts.py           — Kokoro TTS engine
+  stt.py           — Whisper STT engine
+  summarizer.py    — Hook JSON → spoken summary
+  stem_listener.py — AirPod stem-click detection
+  audio.py         — Audio device routing
+  hooks/           — Claude Code hook scripts
 tests/             — Test suite
-scripts/           — Utility scripts
-data/              — Input data (gitignored)
-results/           — Output artifacts
-research/          — Literature and hypotheses
+scripts/           — Setup and install scripts
 ```
-
-## For AI Agents
-
-If you're an AI agent working on this project, start with `CLAUDE.md`. It contains the mandatory startup protocol, behavioral rules, and coordination guidelines.
-
-## For Humans
-
-Start with `docs/PROJECT_CHARTER.md` for strategic context, then `docs/HANDOFF.md` for current state.
 
 ## Status
 
-**Current Phase:** Setup
-**Last Updated:** <!-- Update with each major milestone -->
+**Current Phase:** G0 — Kickoff (charter review)
 
 ## License
 
-<!-- Add license information -->
+MIT
