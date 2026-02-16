@@ -111,3 +111,13 @@ Phase 1 is fully implemented — both output (TTS) and input (STT) sides. All 9 
   - `--check` runs checks only and exits
   - `--skip-checks` bypasses checks
 - Updated user-facing docs (`README.md`, `docs/HANDSFREE_USER_GUIDE.md`, `scripts/setup.sh`) to include the new check-first workflow.
+
+## Session Update (2026-02-16, codex-1 voice docs)
+
+- Documented Kokoro voice blending and per-terminal voice overrides.
+- Updated `README.md` and `docs/HANDSFREE_USER_GUIDE.md` with:
+  - blend syntax (e.g. `af_heart:0.7,af_nicole:0.3`)
+  - `voice_presets` usage
+  - `HANDSFREE_VOICE` env-var override examples
+  - `unset HANDSFREE_VOICE` reset flow
+- Updated `scripts/setup.sh` default config template to include `voice_presets` and `kokoro_speed`.

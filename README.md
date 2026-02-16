@@ -83,12 +83,32 @@ Example:
   "input_mode": "media_key",
   "verbosity": "detailed",
   "kokoro_voice": "af_heart",
+  "voice_presets": {
+    "narrator": "af_heart:0.7,af_nicole:0.3",
+    "concise": "af_bella"
+  },
+  "kokoro_speed": 1.1,
   "hotkey": "F18",
   "auto_submit": true,
   "auto_submit_after_transcription": true,
   "silence_timeout": 2.5
 }
 ```
+
+Voice options:
+
+- Plain voice: `af_heart`
+- Blend spec: `af_heart:0.7,af_nicole:0.3`
+- Preset name from `voice_presets`: `narrator`
+
+Per-terminal override (no config edits required):
+
+```bash
+export HANDSFREE_VOICE="af_heart:0.7,af_nicole:0.3"
+./scripts/handsfree.sh --media-key
+```
+
+You can use different `HANDSFREE_VOICE` values in different terminals for quick A/B testing.
 
 ## Project Layout
 

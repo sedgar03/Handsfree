@@ -57,6 +57,10 @@ else
   "input_mode": "media_key",
   "verbosity": "detailed",
   "kokoro_voice": "af_heart",
+  "voice_presets": {
+    "narrator": "af_heart:0.7,af_nicole:0.3"
+  },
+  "kokoro_speed": 1.1,
   "hotkey": "F18",
   "auto_submit": true,
   "auto_submit_after_transcription": true,
@@ -97,6 +101,8 @@ echo ""
 echo "Recommended first run:"
 echo "  ./scripts/handsfree.sh --media-key"
 echo "  # (runs permission checks automatically before launch)"
+echo "  # Optional per-terminal voice override:"
+echo "  # export HANDSFREE_VOICE='af_heart:0.7,af_nicole:0.3'"
 echo ""
 echo "Or run checks only:"
 echo "  ./scripts/handsfree.sh --check"

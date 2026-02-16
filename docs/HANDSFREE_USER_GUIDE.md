@@ -80,6 +80,11 @@ Recommended baseline:
   "input_mode": "media_key",
   "verbosity": "detailed",
   "kokoro_voice": "af_heart",
+  "voice_presets": {
+    "narrator": "af_heart:0.7,af_nicole:0.3",
+    "concise": "af_bella"
+  },
+  "kokoro_speed": 1.1,
   "hotkey": "F18",
   "auto_submit": true,
   "auto_submit_after_transcription": true,
@@ -93,6 +98,38 @@ Useful toggles:
 - `auto_submit`: enable/disable Enter submit behavior
 - `auto_submit_after_transcription`: if `true`, submit immediately after STT result is injected
 - `silence_timeout`: seconds of silence before auto-stop
+- `kokoro_speed`: speaking rate (default `1.1`)
+
+Voice syntax:
+
+- Plain voice name: `af_heart`
+- Blend: `af_heart:0.7,af_nicole:0.3`
+- Preset alias: `narrator` (resolved from `voice_presets`)
+
+## Per-Terminal Voice Override
+
+Set voice per shell/terminal tab with `HANDSFREE_VOICE`:
+
+```bash
+export HANDSFREE_VOICE="af_heart:0.7,af_nicole:0.3"
+./scripts/handsfree.sh --media-key
+```
+
+Examples:
+
+```bash
+# Terminal A (warmer blend)
+export HANDSFREE_VOICE="af_heart:0.8,af_nicole:0.2"
+
+# Terminal B (single voice)
+export HANDSFREE_VOICE="af_bella"
+```
+
+To clear override:
+
+```bash
+unset HANDSFREE_VOICE
+```
 
 ## Fast Sanity Tests
 
