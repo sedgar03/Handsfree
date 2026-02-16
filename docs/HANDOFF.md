@@ -3,29 +3,82 @@
 > This file is updated at the end of every work session. It is the primary mechanism for continuity between sessions and agents.
 
 ## Last Updated
-- **Date:** [YYYY-MM-DD]
-- **By:** [agent ID or human name]
+- **Date:** 2026-02-16
+- **By:** codex-1
 
 ## Current State
 
-[One paragraph summarizing where the project stands right now. What phase are we in? What's the overall health?]
+Phase 1 is fully implemented — both output (TTS) and input (STT) sides. All 9 files are written and tested. Setup has been run: uv installed, Kokoro models downloaded (~380MB), whisper model cached (~800MB from HF), hooks installed in settings.json. TTS speaks through Mac speakers. STT records from built-in mic and transcribes via mlx-whisper. Hotkey listener and text injection ready but need interactive testing (requires Accessibility permission for CGEventTap).
 
-## What Was Done (Last Session)
+## What Was Done (This Session)
 
-- [Action taken, with file paths where relevant]
-- [Action taken, with file paths where relevant]
-- [Action taken, with file paths where relevant]
+**Output side (Steps 1-5):**
+- Created `src/config.py` — config reader with get_config() and is_handsfree_enabled()
+- Created `src/tts.py` — Kokoro TTS wrapper with speak(), macOS say fallback, file lock
+- Created `src/summarizer.py` — claude -p summarizer with terse/detailed modes
+- Created `hooks/handsfree_hook.py` — main Claude Code hook (stdin JSON → transcript → summarize → speak)
+- Created `hooks/install.py` — idempotent hook installer for settings.json
+- Created `scripts/setup.sh` — one-command setup (models, config, hooks, test)
+
+**Input side (Steps 6-8):**
+- Created `src/stt.py` — mlx-whisper STT (record + transcribe, passes numpy array directly to avoid ffmpeg dep)
+- Created `src/hotkey_listener.py` — PyObjC CGEventTap for F18 hold-to-record
+- Created `src/listener.py` — unified listener with clipboard + osascript text injection
+
+**Testing:**
+- `setup.sh` ran successfully (uv, models, hooks, TTS test)
+- TTS speaks through Mac speakers (Kokoro TTS working)
+- Hook end-to-end test passed (fake transcript → summarize → speak)
+- STT recorded and transcribed audio (ambient noise → "Yeah. Yeah. Yeah.")
+- Fixed: stt.py passes numpy array directly to mlx_whisper (avoids ffmpeg dependency)
+- Fixed: install.py matcher-aware dedup for Notification hooks
+- Fixed: added `from __future__ import annotations` to all files for Python 3.9 compat
+
+**Docs:**
+- Updated TASKS.md, WORKSTREAMS.md, DECISION_LOG.md
 
 ## Next Steps
 
-1. [Highest priority next action]
-2. [Second priority action]
-3. [Third priority action]
+1. **Interactive test of hotkey listener** — `uv run src/hotkey_listener.py` (needs Accessibility permission)
+2. **Live test** — `touch ~/.claude/handsfree` → use Claude Code → hear summaries → press F18 → speak back
+3. Tune summarization prompts based on real output quality
+4. Tune Kokoro voice selection (audition alternatives to af_heart)
 
 ## Blockers
 
-- [Anything preventing progress, or "None"]
+- Hotkey listener needs macOS Accessibility permission for the terminal app
 
 ## Open Questions
 
-- [Unresolved questions that need human input, or "None"]
+- Which Kokoro voice sounds best for technical summaries? Need to audition alternatives to af_heart.
+- Can `claude -p` use a faster/cheaper model (haiku)? Need to test `--model` flag.
+- Is the clipboard + osascript text injection reliable enough, or should we explore named pipes / claude-commander?
+
+## Session Update (2026-02-16, codex-1)
+
+- Updated `src/media_key_listener.py` to use layered media-command backends:
+  - CGEventTap (session + annotated session)
+  - AppKit `NSEvent` global monitor (`NSEventMaskSystemDefined`)
+  - MediaPlayer `MPRemoteCommandCenter` fallback (toggle/play/next/previous)
+- Added explicit listen-event permission preflight/request (`CGPreflightListenEventAccess`, `CGRequestListenEventAccess`) and clearer guidance for both Accessibility + Input Monitoring.
+- Updated `src/diagnose_events.py` to log all four backends above and print decoded `subtype/data1/keycode/state` for stem clicks.
+- Added `pyobjc-framework-MediaPlayer` to inline uv dependencies in `src/media_key_listener.py`, `src/diagnose_events.py`, and `src/listener.py`.
+- Local validation completed: syntax check via `python3 -m py_compile` for modified scripts. Runtime validation of PyObjC backends must be performed on a machine with network-enabled uv dependency resolution and macOS permissions granted.
+
+## Session Update (2026-02-16, codex-1 follow-up)
+
+- Switched `src/media_key_listener.py` primary backend to `MPRemoteCommandCenter` via `objc.loadBundle` with a silent `sounddevice` output keepalive so AirPods stem commands route to the CLI process on macOS 16.
+- Added `src/test_mpremote.py` live test path (target/action handlers) to verify single/double/triple stem clicks.
+- Hardened submit behavior in `src/listener.py`:
+  - multiple Enter delivery strategies (`key code 36`, `keystroke return`, ASCII 13)
+  - slight timing delay before Enter
+- Added event fallback logic in `src/media_key_listener.py` for inconsistent remote-command delivery (e.g., pause/play-only patterns).
+- Implemented fully handsfree mode:
+  - new config key `auto_submit_after_transcription` (default `true`) in `src/config.py`
+  - single click → speak → silence/manual stop → transcribe → auto-send (no second click required)
+- Adjusted audio cues:
+  - chime now indicates recording stopped / no longer listening
+  - whoosh still indicates submit/send
+- Live validation performed with AirPods:
+  - successful transcription injection
+  - successful auto-submit/Enter and message send in conversation.
