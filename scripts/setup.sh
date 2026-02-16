@@ -83,6 +83,17 @@ uv run "$REPO_ROOT/src/tts.py" "Handsfree setup complete"
 echo ""
 echo "=== Setup Complete ==="
 echo ""
+
+echo "--- Permission Self-Check ---"
+if "$REPO_ROOT/scripts/check_permissions.sh"; then
+    echo "[✓] Permission self-check passed."
+else
+    echo "[!] Permission self-check reported issues."
+    echo "    You can re-run anytime with:"
+    echo "      ./scripts/handsfree.sh --check"
+fi
+echo ""
+
 echo "Recommended first run:"
 echo "  ./scripts/handsfree.sh --media-key"
 echo "  # (runs permission checks automatically before launch)"
