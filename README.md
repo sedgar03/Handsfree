@@ -52,6 +52,9 @@ Grant these to the terminal app you use (`Terminal`, `iTerm2`, `Ghostty`, etc.):
 ## Useful Commands
 
 ```bash
+# Permission check only
+./scripts/handsfree.sh --check
+
 # TTS test
 uv run src/tts.py "Handsfree test"
 

@@ -97,3 +97,17 @@ Phase 1 is fully implemented — both output (TTS) and input (STT) sides. All 9 
   - `auto_submit_after_transcription: true`
   - `silence_timeout: 2.5`
 - Updated `scripts/handsfree.sh` startup messaging to reflect auto-submit-after-transcription mode when enabled.
+
+## Session Update (2026-02-16, codex-1 permission checks)
+
+- Added `scripts/check_permissions.py` (uv script) to validate:
+  - Microphone access (sounddevice input stream open)
+  - Accessibility trust (`AXIsProcessTrusted`)
+  - Input Monitoring listen access (`CGPreflightListenEventAccess`)
+  - Automation to `System Events` (AppleScript probe)
+- Added `scripts/check_permissions.sh` wrapper as the user-facing permission check command.
+- Integrated checks into `scripts/handsfree.sh` startup:
+  - checks run automatically before launching session
+  - `--check` runs checks only and exits
+  - `--skip-checks` bypasses checks
+- Updated user-facing docs (`README.md`, `docs/HANDSFREE_USER_GUIDE.md`, `scripts/setup.sh`) to include the new check-first workflow.

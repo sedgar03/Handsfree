@@ -11,6 +11,8 @@
 #   ./scripts/handsfree.sh              # start with configured input mode
 #   ./scripts/handsfree.sh --media-key  # force AirPods stem click mode
 #   ./scripts/handsfree.sh --hotkey     # force F18 hold-to-talk mode
+#   ./scripts/handsfree.sh --check       # run permission checks only
+#   ./scripts/handsfree.sh --skip-checks # skip startup permission checks
 #   ./scripts/handsfree.sh --no-listen  # TTS only, no STT listener
 set -euo pipefail
 
@@ -20,6 +22,8 @@ CLAUDE="/Users/steven_edgar/.local/bin/claude"
 CONFIG_FILE="$HOME/.claude/voice-config.json"
 LISTENER_PID=""
 AUTO_SUBMIT_AFTER_TX="true"
+CHECK_ONLY=false
+RUN_CHECKS=true
 
 # Parse CLI flags
 INPUT_MODE_OVERRIDE=""
@@ -28,6 +32,8 @@ for arg in "$@"; do
     case "$arg" in
         --media-key) INPUT_MODE_OVERRIDE="media_key" ;;
         --hotkey)    INPUT_MODE_OVERRIDE="hotkey" ;;
+        --check)     CHECK_ONLY=true ;;
+        --skip-checks) RUN_CHECKS=false ;;
         --no-listen) NO_LISTEN=true ;;
     esac
 done
@@ -43,6 +49,19 @@ fi
 
 if [ -f "$CONFIG_FILE" ]; then
     AUTO_SUBMIT_AFTER_TX=$(python3 -c "import json; print(str(json.load(open('$CONFIG_FILE')).get('auto_submit_after_transcription', True)).lower())" 2>/dev/null || echo "true")
+fi
+
+if [ "$RUN_CHECKS" = true ]; then
+    echo "[handsfree] Running permission check..."
+    if ! "$REPO_ROOT/scripts/check_permissions.sh"; then
+        echo "[handsfree] Permission check failed. Fix the items above and rerun."
+        exit 1
+    fi
+fi
+
+if [ "$CHECK_ONLY" = true ]; then
+    echo "[handsfree] Permission check passed."
+    exit 0
 fi
 
 cleanup() {

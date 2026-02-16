@@ -46,6 +46,12 @@ The launcher will:
 3. Launch `claude`
 4. Stop listener + disable handsfree mode when Claude exits
 
+Permission checks run automatically before startup. To run checks only:
+
+```bash
+./scripts/handsfree.sh --check
+```
+
 ## AirPods Workflow (Default)
 
 Current default is fully handsfree send:
