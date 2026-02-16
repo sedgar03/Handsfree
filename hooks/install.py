@@ -5,7 +5,8 @@
 # ///
 """Install handsfree hooks into Claude Code settings.json.
 
-Adds handsfree_hook.py to Stop, Notification, and PreCompact events
+Adds handsfree_hook.py to Stop, Notification, and PreCompact events,
+and ask_question_hook.py to PreToolUse (AskUserQuestion) event,
 alongside existing hooks (AOE sounds, etc). Idempotent — safe to re-run.
 """
 
@@ -19,6 +20,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HOOK_SCRIPT = REPO_ROOT / "hooks" / "handsfree_hook.py"
+ASK_QUESTION_HOOK_SCRIPT = REPO_ROOT / "hooks" / "ask_question_hook.py"
+HANDSFREE_HOOK_NAMES = {HOOK_SCRIPT.name, ASK_QUESTION_HOOK_SCRIPT.name}
 CANDIDATE_SETTINGS_PATHS = [
     Path.home() / ".claude" / "settings.json",
     Path.home() / "dotfiles" / "claude" / "settings.json",
@@ -62,28 +65,33 @@ def _save_settings(settings_path: Path, settings: dict):
         f.write("\n")
 
 
-def _hook_entry() -> dict:
-    """Build the hook entry for handsfree."""
+def _hook_entry(script: Path = HOOK_SCRIPT) -> dict:
+    """Build the hook entry for a handsfree script."""
     return {
         "type": "command",
-        "command": str(HOOK_SCRIPT),
+        "command": str(script),
         "async": True,
     }
 
 
 def _is_handsfree_hook(hook: dict) -> bool:
-    """Check if a hook entry is our handsfree hook."""
+    """Check if a hook entry is any of our handsfree hooks."""
     command = hook.get("command", "")
     if not command:
         return False
     try:
-        return Path(command).name == HOOK_SCRIPT.name
+        return Path(command).name in HANDSFREE_HOOK_NAMES
     except Exception:
-        return "handsfree_hook" in command
+        return "handsfree" in command
 
 
-def _add_hook_to_event(settings: dict, event: str, matcher: str | None = None):
-    """Add handsfree hook to an event, preserving existing hooks."""
+def _add_hook_to_event(
+    settings: dict,
+    event: str,
+    matcher: str | None = None,
+    script: Path = HOOK_SCRIPT,
+):
+    """Add a handsfree hook to an event, preserving existing hooks."""
     hooks = settings.setdefault("hooks", {})
     event_hooks = hooks.setdefault(event, [])
 
@@ -93,12 +101,16 @@ def _add_hook_to_event(settings: dict, event: str, matcher: str | None = None):
         if group.get("matcher") != matcher:
             continue
         for hook in group.get("hooks", []):
-            if _is_handsfree_hook(hook):
-                print(f"  {label}: already installed")
-                return
+            cmd = hook.get("command", "")
+            try:
+                if Path(cmd).name == script.name:
+                    print(f"  {label}: already installed")
+                    return
+            except Exception:
+                pass
 
     # Build hook group
-    entry = {"hooks": [_hook_entry()]}
+    entry = {"hooks": [_hook_entry(script)]}
     if matcher:
         entry["matcher"] = matcher
 
@@ -108,7 +120,7 @@ def _add_hook_to_event(settings: dict, event: str, matcher: str | None = None):
 
 def install(settings_path: Path):
     """Add handsfree hooks to Claude Code settings."""
-    print(f"Installing handsfree hooks from: {HOOK_SCRIPT}")
+    print(f"Installing handsfree hooks...")
     print(f"Settings file: {settings_path}")
 
     settings = _load_settings(settings_path)
@@ -118,6 +130,12 @@ def install(settings_path: Path):
     _add_hook_to_event(settings, "PreCompact")
     _add_hook_to_event(settings, "Notification", matcher="idle_prompt")
     _add_hook_to_event(settings, "Notification", matcher="permission_prompt")
+
+    # AskUserQuestion TTS alert (must be async to avoid bug #12031)
+    _add_hook_to_event(
+        settings, "PreToolUse", matcher="AskUserQuestion",
+        script=ASK_QUESTION_HOOK_SCRIPT,
+    )
 
     _save_settings(settings_path, settings)
     print("Done. Hooks installed.")
