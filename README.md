@@ -1,73 +1,112 @@
 # Handsfree
 
-> Walk away from your desk with AirPods. Claude speaks summaries of what it's doing, you tap to talk back. Fully local TTS/STT, no paid APIs.
+Local voice layer for Claude Code on macOS.
+
+- Claude speaks progress updates through TTS hooks.
+- You talk back using AirPods stem click (or hotkey fallback).
+- Speech is transcribed locally and submitted back to Claude.
+
+No paid TTS/STT APIs required.
 
 ## Quick Start
 
 ```bash
-cd ~/Code/Handsfree
-
-# Setup: install deps, download models, configure hooks
+# 1) One-time setup
 ./scripts/setup.sh
 
-# Enable handsfree mode
-touch ~/.claude/handsfree
-
-# Disable handsfree mode
-rm ~/.claude/handsfree
+# 2) Start a handsfree session with AirPods controls
+./scripts/handsfree.sh --media-key
 ```
 
-## How It Works
+When Claude exits, the launcher cleans up automatically.
 
-**Claude → You (TTS):** Claude Code hooks fire when Claude stops or needs input. A `claude -p` call summarizes the response, then Kokoro TTS speaks it through your AirPods.
+## Full Usage Guide
 
-**You → Claude (STT):** Tap your AirPod stem (or press a hotkey). A listener captures mic audio, transcribes it locally with Whisper, and sends the text to Claude.
+See `docs/HANDSFREE_USER_GUIDE.md` for:
 
-**Handsfree mode** layers on top of your existing setup. AOE sound effects still play on your computer. Voice output routes to AirPods. Toggle it with a file, just like `~/.claude/mute`.
+- macOS permission checklist
+- daily workflow
+- config options
+- troubleshooting and diagnostics
+
+## Core Flow (Current Default)
+
+AirPods mode with auto-send enabled:
+
+1. Single click stem to start recording
+2. Speak
+3. Silence (or manual stop click) ends recording
+4. Chime indicates listener is no longer listening
+5. Transcription completes
+6. Message auto-submits to Claude (whoosh cue)
+
+## Required macOS Permissions
+
+Grant these to the terminal app you use (`Terminal`, `iTerm2`, `Ghostty`, etc.):
+
+1. Microphone
+2. Accessibility
+3. Input Monitoring (recommended)
+4. Automation -> allow controlling `System Events`
+
+## Useful Commands
+
+```bash
+# TTS test
+uv run src/tts.py "Handsfree test"
+
+# AirPods remote command test
+PYTHONUNBUFFERED=1 uv run src/test_mpremote.py
+
+# Listener only
+PYTHONUNBUFFERED=1 HANDSFREE_INPUT_MODE=media_key uv run src/listener.py
+
+# Reinstall Claude hooks
+uv run hooks/install.py
+```
 
 ## Config
 
-Edit `~/.claude/voice-config.json`:
+Config path:
+
+```bash
+~/.claude/voice-config.json
+```
+
+Example:
 
 ```json
 {
-  "input_mode": "stem-click",
+  "input_mode": "media_key",
   "verbosity": "detailed",
   "kokoro_voice": "af_heart",
-  "hotkey": "F18"
+  "hotkey": "F18",
+  "auto_submit": true,
+  "auto_submit_after_transcription": true,
+  "silence_timeout": 2.5
 }
 ```
 
-- `input_mode`: `"stem-click"` or `"hotkey"`
-- `verbosity`: `"terse"` (1 sentence) or `"detailed"` (2-3 sentences with file names)
-- `kokoro_voice`: Kokoro voice ID
-- `hotkey`: key for hotkey mode
+## Project Layout
 
-## Project Structure
-
+```text
+scripts/
+  setup.sh            # one-time setup
+  handsfree.sh        # launch handsfree Claude session
+hooks/
+  handsfree_hook.py   # Claude hook: summarize + speak
+  install.py          # add/remove hooks in Claude settings
+src/
+  listener.py         # unified input listener
+  media_key_listener.py
+  hotkey_listener.py
+  stt.py
+  tts.py
+  summarizer.py
+  test_mpremote.py
+docs/
+  HANDSFREE_USER_GUIDE.md
 ```
-hooks/             — Claude Code hook scripts (pointed to by settings.json)
-src/               — Core modules (TTS, STT, summarizer, listeners, audio)
-scripts/           — Setup and model download scripts
-models/            — Downloaded models (gitignored)
-docs/              — Charter, handoff, decisions, learnings
-tests/             — Test suite
-```
-
-## Tech Stack
-
-| Component | Tool |
-|---|---|
-| TTS | Kokoro (kokoro-onnx) / macOS `say` fallback |
-| STT | lightning-whisper-mlx (whisper-large-v3-turbo) |
-| Summarization | `claude -p` with tuned prompts |
-| Input | AirPod stem-click (PyObjC) or global hotkey |
-| Audio | sounddevice |
-| Deps | uv (inline script dependencies, no venv needed) |
-
-## Status
-
-**Current Phase:** G0 — Kickoff (charter review)
 
 ## License
 

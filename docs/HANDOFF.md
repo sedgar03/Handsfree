@@ -82,3 +82,18 @@ Phase 1 is fully implemented — both output (TTS) and input (STT) sides. All 9 
 - Live validation performed with AirPods:
   - successful transcription injection
   - successful auto-submit/Enter and message send in conversation.
+
+## Session Update (2026-02-16, codex-1 docs hardening)
+
+- Rewrote `README.md` to reflect current AirPods-capable flow and point users to a single operations guide.
+- Added `docs/HANDSFREE_USER_GUIDE.md` with:
+  - install + launch workflow
+  - explicit macOS permission checklist (Microphone, Accessibility, Input Monitoring, Automation/System Events)
+  - configuration reference
+  - diagnostics and troubleshooting commands
+- Updated `scripts/setup.sh` default config to align with current behavior:
+  - `input_mode: media_key`
+  - `auto_submit: true`
+  - `auto_submit_after_transcription: true`
+  - `silence_timeout: 2.5`
+- Updated `scripts/handsfree.sh` startup messaging to reflect auto-submit-after-transcription mode when enabled.
