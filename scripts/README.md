@@ -4,8 +4,10 @@
 
 | Script | Purpose | Usage |
 |---|---|---|
-<!-- | `setup.sh` | Initial project setup | `./scripts/setup.sh` | -->
-<!-- | `run_migrations.sh` | Database migrations | `./scripts/run_migrations.sh` | -->
+| `setup.sh` | One-time setup: models, config, Claude hooks, smoke test | `./scripts/setup.sh` |
+| `handsfree.sh` | Launch handsfree Claude session (listener + hooks mode toggle) | `./scripts/handsfree.sh --media-key` |
+| `check_permissions.sh` | Wrapper to run permission diagnostics | `./scripts/check_permissions.sh` |
+| `check_permissions.py` | Detailed permission checks (called by shell wrapper) | `uv run scripts/check_permissions.py` |
 
 ## Guidelines
 

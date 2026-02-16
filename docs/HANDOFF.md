@@ -121,3 +121,19 @@ Phase 1 is fully implemented — both output (TTS) and input (STT) sides. All 9 
   - `HANDSFREE_VOICE` env-var override examples
   - `unset HANDSFREE_VOICE` reset flow
 - Updated `scripts/setup.sh` default config template to include `voice_presets` and `kokoro_speed`.
+
+## Session Update (2026-02-16, codex-1 portability + installability)
+
+- Made scripts portable for other machines/users by removing hardcoded local paths:
+  - replaced user-specific `uv` shebangs with `#!/usr/bin/env -S uv run --script`
+  - updated launch wrappers to resolve `uv` and `claude` via `PATH` (with env overrides)
+  - added `HANDSFREE_CLAUDE_BIN` fallback support in `src/summarizer.py`
+- Hardened hook installation for varied Claude setups:
+  - `hooks/install.py` now supports `--settings`
+  - supports `CLAUDE_SETTINGS_PATH` environment override
+  - auto-detects `~/.claude/settings.json` and `~/dotfiles/claude/settings.json`
+- Added `docs/CLAUDE_HOOKS_SETUP.md` with:
+  - exact hook events and JSON shape
+  - copy/paste install/uninstall/verify commands
+  - agent-friendly instructions for Codex/Claude to apply config changes directly
+- Updated user docs (`README.md`, `docs/HANDSFREE_USER_GUIDE.md`, `scripts/README.md`) to link and use the new hook setup guidance.

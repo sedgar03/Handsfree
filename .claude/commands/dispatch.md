@@ -29,12 +29,17 @@ Dispatch a worker agent to execute a task.
    - **Command:** the full launch command
    - **Branch:** where the work will land
 
-5. Ask: "Ready to dispatch? (The dispatch sound will play as confirmation.)"
+5. Use `AskUserQuestion` to confirm dispatch with clickable options:
+   - Header: "Dispatch"
+   - Question: "Dispatch <task-id> to <agent-type>?"
+   - Options: "Dispatch now" / "Modify task first" / "Pick different task" / "Cancel"
 
-6. On approval:
+6. On "Dispatch now":
    - Update TASKS.md: move task to In Progress, set Assigned to the agent ID
    - Update AGENTS.md: add agent to registry if not already there
    - Execute the launch command in the background
    - Confirm dispatch with the task ID and branch name
 
-7. If the user declines, do not execute. Ask if they want to modify the command or pick a different task.
+7. On "Modify task first": ask what to change using `AskUserQuestion` with relevant options.
+   On "Pick different task": show pending tasks as selectable options.
+   On "Cancel": acknowledge and stop.

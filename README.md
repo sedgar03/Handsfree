@@ -29,6 +29,12 @@ See `docs/HANDSFREE_USER_GUIDE.md` for:
 - config options
 - troubleshooting and diagnostics
 
+See `docs/CLAUDE_HOOKS_SETUP.md` for:
+
+- exactly how Claude Code hooks are installed
+- settings path resolution (`~/.claude` vs `~/dotfiles/claude`)
+- agent-friendly install/verify commands
+
 ## Core Flow (Current Default)
 
 AirPods mode with auto-send enabled:
@@ -66,6 +72,9 @@ PYTHONUNBUFFERED=1 HANDSFREE_INPUT_MODE=media_key uv run src/listener.py
 
 # Reinstall Claude hooks
 uv run hooks/install.py
+
+# Reinstall to a specific Claude settings file
+uv run hooks/install.py --settings ~/.claude/settings.json
 ```
 
 ## Config

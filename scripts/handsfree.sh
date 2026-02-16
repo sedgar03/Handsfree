@@ -17,13 +17,31 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-UV="/Users/steven_edgar/.local/bin/uv"
-CLAUDE="/Users/steven_edgar/.local/bin/claude"
+UV="${UV:-}"
+CLAUDE="${CLAUDE:-}"
 CONFIG_FILE="$HOME/.claude/voice-config.json"
 LISTENER_PID=""
 AUTO_SUBMIT_AFTER_TX="true"
 CHECK_ONLY=false
 RUN_CHECKS=true
+
+if [ -z "$UV" ]; then
+    UV="$(command -v uv || true)"
+fi
+if [ -z "$CLAUDE" ]; then
+    CLAUDE="$(command -v claude || true)"
+fi
+
+if [ -z "$UV" ] || ! command -v "$UV" &>/dev/null; then
+    echo "[handsfree] ERROR: uv not found."
+    echo "[handsfree] Install uv first: curl -LsSf https://astral.sh/uv/install.sh | sh"
+    exit 1
+fi
+if [ -z "$CLAUDE" ] || ! command -v "$CLAUDE" &>/dev/null; then
+    echo "[handsfree] ERROR: claude binary not found."
+    echo "[handsfree] Install Claude Code CLI and ensure 'claude' is on PATH."
+    exit 1
+fi
 
 # Parse CLI flags
 INPUT_MODE_OVERRIDE=""

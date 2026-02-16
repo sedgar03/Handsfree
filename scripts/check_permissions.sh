@@ -3,9 +3,13 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-UV="${UV:-/Users/steven_edgar/.local/bin/uv}"
+UV="${UV:-}"
 
-if ! command -v "$UV" &>/dev/null; then
+if [ -z "$UV" ]; then
+    UV="$(command -v uv || true)"
+fi
+
+if [ -z "$UV" ] || ! command -v "$UV" &>/dev/null; then
     echo "ERROR: uv is required to run permission checks."
     echo "Install uv first: curl -LsSf https://astral.sh/uv/install.sh | sh"
     exit 1

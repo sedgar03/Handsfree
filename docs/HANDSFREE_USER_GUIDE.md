@@ -22,6 +22,10 @@ Use Claude Code without staring at the screen:
 
 This downloads models, installs hooks, and writes a default config.
 
+Hook details and manual install format are documented in:
+
+- `docs/CLAUDE_HOOKS_SETUP.md`
+
 ## Required macOS Permissions
 
 Grant permissions to the terminal app you use to launch Claude (`Terminal`, `iTerm2`, `Ghostty`, etc.).
@@ -37,6 +41,12 @@ Start a handsfree Claude session:
 
 ```bash
 ./scripts/handsfree.sh --media-key
+```
+
+If Claude settings live in a non-default location, reinstall hooks explicitly:
+
+```bash
+uv run hooks/install.py --settings /path/to/settings.json
 ```
 
 The launcher will:
@@ -173,6 +183,12 @@ uv run src/tts.py "Handsfree test"
 
 ```bash
 uv run hooks/install.py
+```
+
+- If Claude CLI is not on PATH for hook subprocesses, set:
+
+```bash
+export HANDSFREE_CLAUDE_BIN="/absolute/path/to/claude"
 ```
 
 ### Return to manual-submit behavior

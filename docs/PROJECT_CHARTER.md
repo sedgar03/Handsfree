@@ -215,7 +215,7 @@ The install script adds entries to `~/dotfiles/claude/settings.json` with absolu
 ```json
 {
   "type": "command",
-  "command": "/Users/steven_edgar/Code/Handsfree/hooks/handsfree_hook.py",
+  "command": "/absolute/path/to/Handsfree/hooks/handsfree_hook.py",
   "async": true
 }
 ```
