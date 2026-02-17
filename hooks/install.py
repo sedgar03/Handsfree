@@ -21,7 +21,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HOOK_SCRIPT = REPO_ROOT / "hooks" / "handsfree_hook.py"
 ASK_QUESTION_HOOK_SCRIPT = REPO_ROOT / "hooks" / "ask_question_hook.py"
-HANDSFREE_HOOK_NAMES = {HOOK_SCRIPT.name, ASK_QUESTION_HOOK_SCRIPT.name}
+PERMISSION_HOOK_SCRIPT = REPO_ROOT / "hooks" / "permission_hook.py"
+HANDSFREE_HOOK_NAMES = {HOOK_SCRIPT.name, ASK_QUESTION_HOOK_SCRIPT.name, PERMISSION_HOOK_SCRIPT.name}
 CANDIDATE_SETTINGS_PATHS = [
     Path.home() / ".claude" / "settings.json",
     Path.home() / "dotfiles" / "claude" / "settings.json",
@@ -135,6 +136,12 @@ def install(settings_path: Path):
     _add_hook_to_event(
         settings, "PreToolUse", matcher="AskUserQuestion",
         script=ASK_QUESTION_HOOK_SCRIPT,
+    )
+
+    # PermissionRequest TTS alert (no matcher — covers all tools)
+    _add_hook_to_event(
+        settings, "PermissionRequest",
+        script=PERMISSION_HOOK_SCRIPT,
     )
 
     _save_settings(settings_path, settings)

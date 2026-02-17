@@ -34,6 +34,7 @@ sys.path.insert(0, str(_repo_root / "src"))
 from config import is_handsfree_enabled
 
 _DEBUG_LOG = Path("/tmp/handsfree-tts-hook.log")
+_PENDING_QUESTION_FILE = Path("/tmp/handsfree-pending-question.json")
 _OPTION_LETTERS = "ABCD"
 
 
@@ -76,6 +77,26 @@ def main():
     except Exception as e:
         _log(f"Failed to import tts: {e}")
         return
+
+    # Write pending question state file BEFORE speaking.
+    # This closes the race window where the user clicks their AirPod stem
+    # during TTS playback — the listener can pick up the file immediately.
+    last_q = questions[-1]
+    all_options = [opt.get("label", "") for opt in last_q.get("options", [])]
+    state = {
+        "question": last_q.get("question", ""),
+        "options": all_options,
+        "timestamp": time.time(),
+    }
+    try:
+        import tempfile
+        tmp_fd, tmp_path = tempfile.mkstemp(dir="/tmp", suffix=".json")
+        with os.fdopen(tmp_fd, "w") as f:
+            json.dump(state, f)
+        os.rename(tmp_path, str(_PENDING_QUESTION_FILE))
+        _log(f"Wrote pending question file with {len(all_options)} options")
+    except OSError as e:
+        _log(f"Failed to write pending question file: {e}")
 
     # Speak attention getter
     speak("Attention: there's a question on your computer.")

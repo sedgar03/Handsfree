@@ -123,5 +123,10 @@ def speak(text: str, voice: str | None = None, speed: float = 1.1):
 
 
 if __name__ == "__main__":
-    text = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else "Hello from Handsfree"
-    speak(text)
+    import argparse
+    parser = argparse.ArgumentParser(description="Speak text via Kokoro TTS")
+    parser.add_argument("text", nargs="*", default=["Hello from Handsfree"])
+    parser.add_argument("--voice", default=None, help="Voice name, preset, or blend spec")
+    parser.add_argument("--speed", type=float, default=1.1, help="Speech speed (default: 1.1)")
+    args = parser.parse_args()
+    speak(" ".join(args.text), voice=args.voice, speed=args.speed)

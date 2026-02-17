@@ -46,6 +46,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from stt import SAMPLE_RATE, transcribe
 
+PENDING_QUESTION_FILE = Path("/tmp/handsfree-pending-question.json")
+PENDING_PERMISSION_FILE = Path("/tmp/handsfree-pending-permission.json")
+
 # --- Media key constants (from IOKit/hidsystem/ev_keymap.h) ---
 NX_KEYTYPE_PLAY = 16
 NX_KEYTYPE_NEXT = 17
@@ -77,10 +80,10 @@ MIN_SPEECH_DURATION = 0.3  # ignore very short bursts
 POST_TRANSCRIPTION_SUBMIT_WINDOW = 5.0  # seconds
 
 
-def _play_sound(path: Path, duration: float | None = None):
+def _play_sound(path: Path, duration: float | None = None, volume: float = 1.0):
     """Play a sound file via afplay (non-blocking in a thread)."""
     def _play():
-        cmd = ["afplay", str(path)]
+        cmd = ["afplay", "-v", str(volume), str(path)]
         if duration:
             cmd += ["-t", str(duration)]
         try:
@@ -332,8 +335,14 @@ class MediaKeyListener:
         self._stop_event.set()
         self._finalize_recording()
 
-    def _cancel_recording(self):
-        """Cancel recording without transcribing (e.g. no speech detected)."""
+    def _cancel_recording(self, clear_pending_question: bool = False):
+        """Cancel recording without transcribing (e.g. no speech detected).
+
+        Args:
+            clear_pending_question: If True, also delete the pending question
+                state file. Only set for explicit cancels (triple-click), not
+                for auto-cancel on no speech detected.
+        """
         with self._state_lock:
             if self._state != "recording":
                 return
@@ -345,6 +354,10 @@ class MediaKeyListener:
             self._stream.close()
             self._stream = None
         self._chunks = []
+
+        if clear_pending_question:
+            PENDING_QUESTION_FILE.unlink(missing_ok=True)
+            PENDING_PERMISSION_FILE.unlink(missing_ok=True)
 
     def _finalize_recording(self):
         """Stop stream, transcribe audio, invoke callback."""
@@ -372,15 +385,19 @@ class MediaKeyListener:
             return
 
         print(f"[media-key] Captured {duration:.1f}s, transcribing...", file=sys.stderr)
-        _play_sound(SOUND_LISTENING_STOP, duration=1.0)
+        _play_sound(SOUND_LISTENING_STOP, duration=1.0, volume=0.5)
 
         def do_transcribe():
             try:
                 text = transcribe(audio)
                 if text and text.strip():
-                    self.on_transcription(text.strip())
+                    answered_question = self.on_transcription(text.strip())
                     self._last_transcription_at = time.monotonic()
-                    if self.auto_submit_after_transcription and self.auto_submit:
+                    if answered_question:
+                        # Question was answered via picker — do NOT auto-submit,
+                        # that would press Enter on whatever appears after the picker.
+                        print("[media-key] Question answered, skipping auto-submit.", file=sys.stderr)
+                    elif self.auto_submit_after_transcription and self.auto_submit:
                         print("[media-key] Auto-submit after transcription.", file=sys.stderr)
                         self._pending_submit_after_transcription = True
                         self._last_transcription_at = 0.0
@@ -483,7 +500,10 @@ class MediaKeyListener:
         if keycode == NX_KEYTYPE_PREVIOUS:
             if self._state == "recording":
                 print(f"[media-key] PREVIOUS from {source} -> cancel recording", file=sys.stderr)
-                threading.Thread(target=self._cancel_recording, daemon=True).start()
+                threading.Thread(
+                    target=lambda: self._cancel_recording(clear_pending_question=True),
+                    daemon=True,
+                ).start()
                 return True
             print(f"[media-key] PREVIOUS from {source} (ignored)", file=sys.stderr)
             return False
