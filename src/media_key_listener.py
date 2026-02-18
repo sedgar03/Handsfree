@@ -29,6 +29,7 @@ so macOS can route remote commands to this process as now-playing.
 
 from __future__ import annotations
 
+import os
 import signal
 import subprocess
 import sys
@@ -192,15 +193,15 @@ class MediaKeyListener:
         self,
         on_transcription=None,
         on_submit=None,
-        silence_timeout: float = 2.5,
-        max_recording: float = 60.0,
+        silence_timeout: float = 4.5,
+        max_recording: float = 300.0,
         auto_submit: bool = True,
         auto_submit_after_transcription: bool = True,
     ):
         self.on_transcription = on_transcription or self._default_transcription_handler
         self.on_submit = on_submit
         self.silence_timeout = silence_timeout
-        self.max_recording = max_recording
+        self.max_recording = max_recording or 300.0
         self.auto_submit = auto_submit
         self.auto_submit_after_transcription = auto_submit_after_transcription
 
@@ -233,6 +234,8 @@ class MediaKeyListener:
         self._pending_submit_after_transcription = False
         self._last_remote_pause_at = 0.0
         self._last_transcription_at = 0.0
+        self._event_counter = 0
+        self._last_remote_event_at = 0.0
 
     @staticmethod
     def _default_transcription_handler(text: str):
@@ -279,16 +282,27 @@ class MediaKeyListener:
         self._vad_thread.start()
 
     def _vad_monitor(self):
-        """Monitor audio energy and auto-stop on silence."""
+        """Monitor audio energy and auto-stop on silence.
+
+        Calibrates a noise floor from the first ~0.5s of audio so that
+        silence detection works in noisy environments (cafes, outdoors, etc.).
+        """
         speech_started = False
         silence_start: float | None = None
         wait_start = time.monotonic()
         recording_start = time.monotonic()
 
+        # Noise floor calibration
+        CALIBRATION_DURATION = 0.5  # seconds
+        calibration_samples: list[float] = []
+        noise_floor: float | None = None
+        effective_silence_threshold = SILENCE_THRESHOLD
+        effective_speech_threshold = SPEECH_THRESHOLD
+
         while not self._stop_event.is_set():
             time.sleep(CHUNK_DURATION)
 
-            # Check state — might have been stopped by double-click
+            # Check state — might have been stopped by click
             if self._state != "recording":
                 return
 
@@ -303,8 +317,25 @@ class MediaKeyListener:
             recent = self._chunks[-1].flatten()
             rms = float(np.sqrt(np.mean(recent**2)))
 
+            # Calibrate noise floor from first 0.5s
+            if noise_floor is None:
+                calibration_samples.append(rms)
+                if elapsed >= CALIBRATION_DURATION and calibration_samples:
+                    noise_floor = sum(calibration_samples) / len(calibration_samples)
+                    # Silence = within 2x noise floor (but never below the base threshold)
+                    effective_silence_threshold = max(noise_floor * 2.0, SILENCE_THRESHOLD)
+                    # Speech = at least 3x noise floor
+                    effective_speech_threshold = max(noise_floor * 3.0, SPEECH_THRESHOLD)
+                    print(
+                        f"[media-key] Noise floor: {noise_floor:.5f}, "
+                        f"silence threshold: {effective_silence_threshold:.5f}, "
+                        f"speech threshold: {effective_speech_threshold:.5f}",
+                        file=sys.stderr,
+                    )
+                continue
+
             if not speech_started:
-                if rms > SPEECH_THRESHOLD:
+                if rms > effective_speech_threshold:
                     speech_started = True
                     silence_start = None
                     print("[media-key] Speech detected.", file=sys.stderr)
@@ -313,7 +344,7 @@ class MediaKeyListener:
                     self._cancel_recording()
                     return
             else:
-                if rms < SILENCE_THRESHOLD:
+                if rms < effective_silence_threshold:
                     if silence_start is None:
                         silence_start = time.monotonic()
                     elif time.monotonic() - silence_start > self.silence_timeout:
@@ -327,12 +358,14 @@ class MediaKeyListener:
             self._finalize_recording()
 
     def _stop_recording_manual(self):
-        """Manual stop via double-click during recording."""
+        """Manual stop via stem click during recording."""
         with self._state_lock:
             if self._state != "recording":
+                print("[media-key] Manual stop ignored (state={}).".format(self._state), file=sys.stderr)
                 return
-        print("[media-key] Manual stop (double-click).", file=sys.stderr)
-        self._stop_event.set()
+            # Set stop event while still holding lock to prevent VAD race
+            self._stop_event.set()
+        print("[media-key] Manual stop (stem click).", file=sys.stderr)
         self._finalize_recording()
 
     def _cancel_recording(self, clear_pending_question: bool = False):
@@ -424,11 +457,16 @@ class MediaKeyListener:
             print("[media-key] Submitting (Enter).", file=sys.stderr)
             self.on_submit()
 
-    def _should_drop_duplicate(self, keycode: int, state: int) -> bool:
+    def _should_drop_duplicate(self, keycode: int, state: int, source: str) -> bool:
         """Drop duplicate mirrored events from multiple backends."""
         now = time.monotonic()
         key = (keycode, state)
         if self._last_event_key == key and now - self._last_event_at < 0.08:
+            print(
+                f"[media-key][drop] key={keycode}:{state:#x} source={source} "
+                f"listener_state={self._state} t={now:.3f}",
+                file=sys.stderr,
+            )
             return True
         self._last_event_key = key
         self._last_event_at = now
@@ -443,9 +481,15 @@ class MediaKeyListener:
 
     def _handle_media_key(self, keycode: int, state: int, source: str) -> bool:
         """Dispatch media key to state machine. Returns True when consumed."""
+        if state == MEDIA_KEY_DOWN:
+            print(
+                f"[media-key][event] key={keycode}:{state:#x} source={source} "
+                f"listener_state={self._state}",
+                file=sys.stderr,
+            )
         if state != MEDIA_KEY_DOWN:
             return False
-        if self._should_drop_duplicate(keycode, state):
+        if self._should_drop_duplicate(keycode, state, source):
             return False
 
         if keycode == NX_KEYTYPE_PLAY:
@@ -512,8 +556,16 @@ class MediaKeyListener:
 
     def _on_remote_command(self, command: str):
         """Map MPRemoteCommandCenter events to listener semantics."""
+        now = time.monotonic()
+        since_last = now - self._last_remote_event_at if self._last_remote_event_at else -1.0
+        self._last_remote_event_at = now
+        self._event_counter += 1
+        print(
+            f"[media-key][remote #{self._event_counter}] command={command} "
+            f"state={self._state} t={now:.3f} dt={since_last:.3f}",
+            file=sys.stderr,
+        )
         if command in ("toggle", "play", "pause"):
-            now = time.monotonic()
             # Some AirPods/macOS combinations never emit nextTrack for double-click.
             # Treat two pause/toggle/play commands in quick succession as a double-click.
             if now - self._last_remote_pause_at <= 0.6:
@@ -574,6 +626,9 @@ class MediaKeyListener:
     def _start_cg_tap(self, tap_name: str, location: int, event_mask: int) -> bool:
         import Quartz
 
+        if tap_name in self._tap_ports:
+            return True
+
         callback = self._make_tap_callback(tap_name)
         self._tap_callbacks.append(callback)
 
@@ -603,6 +658,9 @@ class MediaKeyListener:
 
     def _start_appkit_monitor(self) -> bool:
         import AppKit
+
+        if self._global_monitor is not None:
+            return True
 
         mask = getattr(
             AppKit,
@@ -705,7 +763,7 @@ class MediaKeyListener:
             return False
 
     @staticmethod
-    def _preflight_event_access() -> bool:
+    def _preflight_event_access(request_if_missing: bool = True) -> bool:
         """Check/request listen-event permission where supported."""
         import Quartz
 
@@ -717,19 +775,53 @@ class MediaKeyListener:
         if preflight():
             return True
 
-        print(
-            "[media-key] Listen-event access not granted. Requesting permission...",
-            file=sys.stderr,
-        )
-        if callable(request):
+        if request_if_missing:
+            print(
+                "[media-key] Listen-event access not granted. Requesting permission...",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "[media-key] Listen-event access not granted (auto mode, no prompt).",
+                file=sys.stderr,
+            )
+        if request_if_missing and callable(request):
             return bool(request())
         return False
 
+    def _start_legacy_backends(self, request_permission: bool = False) -> list[str]:
+        """Start CGEventTap/AppKit fallback backends.
+
+        MPRemoteCommandCenter can drop events while a mic input stream is active on
+        some macOS/AirPods combinations. Running legacy backends in parallel keeps a
+        stop path available during recording.
+        """
+        import Quartz
+
+        started: list[str] = []
+        event_mask = Quartz.CGEventMaskBit(NX_SYSDEFINED)
+        has_access = self._preflight_event_access(request_if_missing=request_permission)
+
+        if has_access:
+            if self._start_cg_tap("session", Quartz.kCGSessionEventTap, event_mask):
+                started.append("CGEventTap(session)")
+            if self._start_cg_tap("annotated", Quartz.kCGAnnotatedSessionEventTap, event_mask):
+                started.append("CGEventTap(annotated)")
+        else:
+            mode = "request" if request_permission else "auto"
+            print(
+                "[media-key] Listen-event access unavailable; skipping CGEventTap "
+                f"fallback (mode={mode}).",
+                file=sys.stderr,
+            )
+
+        if self._start_appkit_monitor():
+            started.append("NSEvent global monitor")
+        return started
+
     def run(self):
         """Start listening for media key events. Blocks until interrupted."""
-        import os
         import AppKit
-        import Quartz
         from Foundation import NSRunLoop, NSDate
 
         print("[media-key] Listening for AirPods stem clicks...", file=sys.stderr)
@@ -744,26 +836,21 @@ class MediaKeyListener:
         if self._start_remote_command_backend():
             started_sources.append("MPRemoteCommandCenter + silent audio")
 
-        legacy_fallback = os.environ.get("HANDSFREE_ENABLE_LEGACY_TAPS") == "1"
-        if not started_sources and legacy_fallback:
-            has_access = self._preflight_event_access()
-            if not has_access:
-                print(
-                    "[media-key] Access denied. Enable both Accessibility and Input Monitoring for your terminal.",
-                    file=sys.stderr,
-                )
-            event_mask = Quartz.CGEventMaskBit(NX_SYSDEFINED)
-            if self._start_cg_tap("session", Quartz.kCGSessionEventTap, event_mask):
-                started_sources.append("CGEventTap(session)")
-            if self._start_cg_tap("annotated", Quartz.kCGAnnotatedSessionEventTap, event_mask):
-                started_sources.append("CGEventTap(annotated)")
-            if self._start_appkit_monitor():
-                started_sources.append("NSEvent global monitor")
+        legacy_mode = os.environ.get("HANDSFREE_ENABLE_LEGACY_TAPS", "auto").strip().lower()
+        legacy_disabled = legacy_mode in {"0", "false", "off", "no", "disabled"}
+        request_permission = legacy_mode in {"1", "true", "yes", "on", "force"}
+
+        if not legacy_disabled:
+            started_sources.extend(
+                self._start_legacy_backends(request_permission=request_permission)
+            )
+
         if not started_sources:
             print(
                 "ERROR: Could not start any media-key event backend.\n"
                 "Primary backend failed: MPRemoteCommandCenter + silent audio.\n"
-                "Optional fallback: set HANDSFREE_ENABLE_LEGACY_TAPS=1 for CGEventTap backends.",
+                "Fallback backends also failed. Enable terminal permissions for "
+                "Accessibility and Input Monitoring, then retry.",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -812,8 +899,8 @@ if __name__ == "__main__":
 
     listener = MediaKeyListener(
         on_transcription=_print_text,
-        silence_timeout=config.get("silence_timeout", 2.5),
-        max_recording=60.0,
+        silence_timeout=config.get("silence_timeout", 4.5),
+        max_recording=config.get("max_recording", 300.0),
         auto_submit=config.get("auto_submit", True),
         auto_submit_after_transcription=config.get("auto_submit_after_transcription", True),
     )

@@ -71,11 +71,11 @@
 
 ## In Progress
 
-- None
-
----
-
 ## Completed
+
+### T020: Debug Stem-Click-to-Stop During Recording
+- **Completed:** 2026-02-18
+- **Outcome:** Added per-event remote-command diagnostics in `src/media_key_listener.py`, added `src/test_mpremote_inputstream.py` to verify MPRemote callbacks with and without an active `sd.InputStream`, and enabled automatic parallel legacy fallback backends (AppKit + CGEventTap when permission allows) so stem-click stop still works when MPRemote delivery drops during recording.
 
 ### T019: Full Test Coverage
 - **Completed:** 2026-02-18
