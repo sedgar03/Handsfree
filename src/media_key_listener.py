@@ -73,8 +73,8 @@ SOUND_SUBMIT = _SOUNDS_DIR / "mail-sent.mp3"
 
 # --- VAD defaults (can be overridden via config) ---
 CHUNK_DURATION = 0.1  # seconds per chunk for energy calculation
-SPEECH_THRESHOLD = 0.015  # RMS energy above this = speech
-SILENCE_THRESHOLD = 0.008  # RMS below this = silence
+SPEECH_THRESHOLD = 0.002  # RMS energy above this = speech (low for AirPods BT mic)
+SILENCE_THRESHOLD = 0.0015  # RMS below this = silence (between AirPods noise floor and speech)
 MAX_WAIT_FOR_SPEECH = 10.0  # max seconds before giving up
 MIN_SPEECH_DURATION = 0.3  # ignore very short bursts
 POST_TRANSCRIPTION_SUBMIT_WINDOW = 5.0  # seconds

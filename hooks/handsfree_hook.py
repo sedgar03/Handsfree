@@ -57,7 +57,11 @@ def _extract_last_assistant(transcript_path: str) -> dict | None:
     if not path.exists():
         return None
 
-    last_content = None
+    last_text = None
+    last_text_pos = -1
+    last_question = None
+    last_question_pos = -1
+    pos = 0
     with open(path) as f:
         for line in f:
             line = line.strip()
@@ -84,12 +88,22 @@ def _extract_last_assistant(transcript_path: str) -> dict | None:
                             ask_question = block.get("input", {})
                     elif isinstance(block, str):
                         texts.append(block)
-                last_content = {
-                    "text": "\n".join(texts) if texts else None,
-                    "ask_question": ask_question,
-                }
+                if texts and "\n".join(texts).strip():
+                    last_text = "\n".join(texts)
+                    last_text_pos = pos
+                if ask_question:
+                    last_question = ask_question
+                    last_question_pos = pos
+            pos += 1
 
-    return last_content
+    if not last_text and not last_question:
+        return None
+    # Only return whichever came last — don't let a stale question
+    # override a more recent text response.
+    return {
+        "text": last_text if last_text_pos >= last_question_pos else None,
+        "ask_question": last_question if last_question_pos > last_text_pos else None,
+    }
 
 
 def _speak_ask_question(ask_input: dict) -> bool:
@@ -171,6 +185,12 @@ def main():
         return
 
     _log(f"Got hook input keys: {list(hook_input.keys())}")
+
+    # Brief delay to let Claude Code finish writing the latest response
+    # to the transcript JSONL. The Stop hook fires slightly before the
+    # final assistant message is flushed.
+    import time as _time
+    _time.sleep(1.0)
 
     # Skip speaking if the permission hook already spoke recently.
     # This avoids double-speech when both Notification[permission_prompt]
