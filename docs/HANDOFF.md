@@ -3,8 +3,8 @@
 > This file is updated at the end of every work session. It is the primary mechanism for continuity between sessions and agents.
 
 ## Last Updated
-- **Date:** 2026-02-16
-- **By:** codex-1
+- **Date:** 2026-02-18
+- **By:** codex-2
 
 ## Current State
 
@@ -137,3 +137,19 @@ Phase 1 is fully implemented — both output (TTS) and input (STT) sides. All 9 
   - copy/paste install/uninstall/verify commands
   - agent-friendly instructions for Codex/Claude to apply config changes directly
 - Updated user docs (`README.md`, `docs/HANDSFREE_USER_GUIDE.md`, `scripts/README.md`) to link and use the new hook setup guidance.
+
+## Session Update (2026-02-18, codex-2 test coverage)
+
+- Completed `T019` on branch `work/codex-2/T019-test-coverage`.
+- Added comprehensive test suites:
+  - `tests/unit/test_handsfree_hook.py`
+  - `tests/unit/test_config.py`
+  - `tests/unit/test_summarizer.py`
+  - `tests/unit/test_tts.py`
+  - `tests/unit/test_stt.py`
+  - `tests/unit/test_vad.py`
+  - `tests/integration/test_hook_pipeline.py`
+  - `tests/integration/test_listener_flow.py`
+- Added `tests/conftest.py` for shared import path setup.
+- Added `pyproject.toml` with `pytest` and `numpy` so the project test command works directly with `uv run pytest tests/`.
+- Validation: `uv run pytest tests/` passes with 26 tests; all hardware-facing paths are mocked/stubbed and run headless.
