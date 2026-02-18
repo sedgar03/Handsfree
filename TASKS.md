@@ -71,11 +71,15 @@
 
 ## In Progress
 
-_None_
+- None
 
 ---
 
 ## Completed
+
+### T019: Full Test Coverage
+- **Completed:** 2026-02-18
+- **Outcome:** Added comprehensive unit/integration coverage for hook extraction, config, summarizer, TTS, STT, VAD, and listener/hook pipelines using mocked dependencies and no hardware requirements. Test command now runs as `uv run pytest tests/` and passes.
 
 ### T003: Implement src/config.py — config reader
 - **Completed:** 2026-02-15
