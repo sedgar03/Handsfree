@@ -4,7 +4,7 @@
 
 ## Last Updated
 - **Date:** 2026-02-18
-- **By:** codex-2
+- **By:** codex-3
 
 ## Current State
 
@@ -153,3 +153,26 @@ Phase 1 is fully implemented — both output (TTS) and input (STT) sides. All 9 
 - Added `tests/conftest.py` for shared import path setup.
 - Added `pyproject.toml` with `pytest` and `numpy` so the project test command works directly with `uv run pytest tests/`.
 - Validation: `uv run pytest tests/` passes with 26 tests; all hardware-facing paths are mocked/stubbed and run headless.
+
+## Session Update (2026-02-18, codex-3 T020 stem-click stop)
+
+- Completed `T020` implementation work in `src/media_key_listener.py`:
+  - Added diagnostic logging for every MPRemote callback with timestamp, listener state, and delta from prior callback (`[media-key][remote #N] ...`).
+  - Added duplicate-drop diagnostics (`[media-key][drop] ...`) and key-event source logging (`[media-key][event] ...`) so we can confirm whether events are absent vs received-but-dropped.
+  - Added automatic parallel fallback backend startup in `run()`:
+    - MPRemote remains primary.
+    - AppKit global monitor and CGEventTap are now started opportunistically as fallbacks (`HANDSFREE_ENABLE_LEGACY_TAPS=auto` default; `1/true` requests permission prompt; `0/false` disables).
+    - This keeps a stop path available when MPRemote delivery drops during active recording.
+- Added standalone diagnostic script `src/test_mpremote_inputstream.py`:
+  - Runs 3 phases (no mic, mic open, mic closed) with command counts per phase.
+  - Designed to directly validate hypothesis #1: MPRemote callbacks drop while `sd.InputStream` is active.
+  - Prints a summary verdict at the end.
+- Added regression tests in `tests/unit/test_media_key_controls.py`:
+  - Single click from idle starts recording.
+  - Single click while recording triggers manual stop.
+  - Double-click window mapping to NEXT still triggers stop in recording state.
+  - PLAY during transcribing still queues auto-submit.
+- Validation run:
+  - Pass: `uv run pytest tests/unit/test_media_key_controls.py tests/integration/test_listener_flow.py`
+  - Pass: `python3 -m py_compile src/media_key_listener.py src/test_mpremote_inputstream.py tests/unit/test_media_key_controls.py`
+  - Note: existing `tests/unit/test_vad.py` currently fails due pre-existing threshold calibration changes already present in the working tree.
