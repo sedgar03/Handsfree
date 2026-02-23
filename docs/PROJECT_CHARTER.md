@@ -6,7 +6,7 @@ Walk away from your desk with AirPods and stay in the loop while Claude Code wor
 
 ## Core Hypothesis / Thesis
 
-A lightweight local voice bridge (lightning-whisper-mlx STT + Kokoro TTS + macOS media key / hotkey input) can provide a usable hands-free Claude Code experience with <2s latency, enabling productive "walk around" coding sessions.
+A lightweight local voice bridge (mlx-whisper STT + Kokoro TTS + macOS media key / hotkey input) can provide a usable hands-free Claude Code experience with <2s latency, enabling productive "walk around" coding sessions.
 
 ## Sub-goals
 
@@ -19,12 +19,12 @@ A lightweight local voice bridge (lightning-whisper-mlx STT + Kokoro TTS + macOS
 
 | Criterion | Measurable Threshold | Status |
 |---|---|---|
-| TTS speaks summaries on Stop/Notification hooks | Hear spoken summary within 3s of Claude stopping | Not started |
-| Summarization via `claude -p` produces useful output | Summary is 1-3 sentences, captures what happened and what's needed | Not started |
-| STT captures voice and injects into Claude | Spoken command transcribed and sent to Claude within 3s | Not started |
-| Both stem-click and hotkey input work | Either can trigger mic capture, user can switch between them | Not started |
-| Fully local — no paid APIs | Works offline after initial model downloads (except `claude -p` for summarization) | Not started |
-| Handsfree mode coexists with AOE sounds | AOE sounds still play on computer; voice goes to AirPods | Not started |
+| TTS speaks summaries on Stop hook | Hear spoken summary within 3s of Claude stopping | Working — Stop hook summarizes via `claude -p` and speaks via Kokoro |
+| Summarization via `claude -p` produces useful output | Summary is 1-3 sentences, captures what happened and what's needed | Working — detailed and terse verbosity modes implemented |
+| STT captures voice and injects into Claude | Spoken command transcribed and sent to Claude within 3s | Working — mlx-whisper transcribes, auto-submits to Claude |
+| Both stem-click and hotkey input work | Either can trigger mic capture, user can switch between them | Working — media_key (stem) and hotkey (F18) modes, switchable via config |
+| Fully local — no paid APIs | Works offline after initial model downloads (except `claude -p` for summarization) | Working — Kokoro TTS + mlx-whisper STT are fully local |
+| Handsfree mode coexists with AOE sounds | AOE sounds still play on computer; voice goes to AirPods | Working — handsfree toggle file enables/disables voice layer independently |
 
 ## Stakeholders & Roles
 
@@ -41,7 +41,7 @@ A lightweight local voice bridge (lightning-whisper-mlx STT + Kokoro TTS + macOS
 - Claude Code hook integration (Stop, Notification, PreCompact events)
 - **Handsfree mode** toggled via `~/.claude/handsfree` file (like existing `~/.claude/mute` and `~/.claude/auto` patterns)
 - Local TTS via Kokoro (with macOS `say` as fallback)
-- Local STT via lightning-whisper-mlx with whisper-large-v3-turbo
+- Local STT via mlx-whisper with whisper-large-v3-turbo
 - Summarization via `claude -p` with a carefully tuned prompt
 - Configurable verbosity levels (terse / detailed) toggled at runtime
 - AirPod stem-click detection via macOS media key events (PyObjC CGEventTap)
@@ -106,7 +106,7 @@ User taps AirPod stem / presses hotkey
 User taps again / releases hotkey
   │
   ├── Stop recording
-  ├── Transcribe via lightning-whisper-mlx (whisper-large-v3-turbo)
+  ├── Transcribe via mlx-whisper (whisper-large-v3-turbo)
   └── Inject transcribed text into Claude Code session
 ```
 
@@ -169,7 +169,7 @@ This adds ~1-2s latency (API call) but produces much better summaries than heuri
 │   Global hotkey (e.g. F18)                                │
 │     └──→ listener daemon                                  │
 │           ├─ sounddevice → built-in mic                   │
-│           ├─ lightning-whisper-mlx STT                    │
+│           ├─ mlx-whisper STT                    │
 │           └─ inject text → Claude Code stdin              │
 └──────────────────────────────────────────────────────────┘
 ```
@@ -191,7 +191,7 @@ This is a flat repo with scripts — not a Python package. Hooks point directly 
 ```
 src/
   tts.py             — Kokoro TTS wrapper (queue, play, device routing)
-  stt.py             — lightning-whisper-mlx wrapper
+  stt.py             — mlx-whisper wrapper
   summarizer.py      — claude -p summarization with verbosity levels
   stem_listener.py   — AirPod stem-click detection (PyObjC CGEventTap)
   hotkey_listener.py — Global hotkey detection
@@ -249,7 +249,7 @@ Once the MVP is proven, package as `uv tool install handsfree`. Hooks would refe
 |---|---|---|
 | TTS | Kokoro via kokoro-onnx | 82M params, sub-200ms, best quality/speed ratio, Apache 2.0 |
 | TTS fallback | macOS `say` | Zero-setup instant fallback |
-| STT | lightning-whisper-mlx + whisper-large-v3-turbo | 10x faster than whisper.cpp on Apple Silicon, purpose-built for M-series |
+| STT | mlx-whisper + whisper-large-v3-turbo | 10x faster than whisper.cpp on Apple Silicon, purpose-built for M-series |
 | Summarization | `claude -p` (Claude Code print mode) | Best summary quality, uses existing Claude plan, ~1-2s latency |
 | Media keys | PyObjC CGEventTap | Native macOS media key detection for AirPod stem clicks |
 | Global hotkey | PyObjC CGEventTap (same lib) | Same event tap can detect keyboard shortcuts |
@@ -260,7 +260,7 @@ Once the MVP is proven, package as `uv tool install handsfree`. Hooks would refe
 
 ### Alternative considered: mlx-audio
 
-[mlx-audio](https://github.com/Blaizzy/mlx-audio) (5.9k stars) bundles both Kokoro TTS and Whisper STT in one Apple Silicon-optimized package. Could simplify dependencies. Worth evaluating at G1 — if it works well, we could use it as the single audio dependency instead of separate kokoro-onnx + lightning-whisper-mlx.
+[mlx-audio](https://github.com/Blaizzy/mlx-audio) (5.9k stars) bundles both Kokoro TTS and Whisper STT in one Apple Silicon-optimized package. Could simplify dependencies. Worth evaluating at G1 — if it works well, we could use it as the single audio dependency instead of separate kokoro-onnx + mlx-whisper.
 
 ## Milestones
 

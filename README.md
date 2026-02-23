@@ -8,6 +8,8 @@ Local voice layer for Claude Code on macOS.
 
 No paid TTS/STT APIs required.
 
+**Platform:** macOS 14+ (Sonoma) on Apple Silicon. Requires AirPods (or built-in mic) and terminal permissions for Accessibility + Input Monitoring.
+
 ## Core Flow (Current Default)
 
 AirPods mode with auto-send enabled:
@@ -15,13 +17,12 @@ AirPods mode with auto-send enabled:
 1. Claude finishes talking or has a question
 2. Text to speech triggers and Claude's response is modified and read aloud
 3. The listener waits for the user to take an action
-4. User Single click stem to start recording
+4. User single-clicks stem to start recording
 5. Speak
-6. Silence (or manual stop stem click on airpod) ends recording
+6. Silence (or manual stop stem click on AirPod) ends recording
 7. Chime indicates listener is no longer listening
 8. Transcription completes
 9. Message auto-submits to Claude (whoosh cue)
-   
 ## Quick Start
 
 ```bash
@@ -56,7 +57,7 @@ See `docs/CLAUDE_HOOKS_SETUP.md` for:
 
 - exactly how Claude Code hooks are installed
 - settings path resolution (`~/.claude` vs `~/dotfiles/claude`)
-- agent-friendly install/verify commands
+- manual installation and verification commands
 
 
 
@@ -107,7 +108,8 @@ Example:
   "hotkey": "F18",
   "auto_submit": true,
   "auto_submit_after_transcription": true,
-  "silence_timeout": 2.5
+  "silence_timeout": 4.5,
+  "max_recording": 300
 }
 ```
 

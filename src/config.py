@@ -20,7 +20,10 @@ DEFAULTS = {
     "hotkey": "F18",
     "auto_submit": True,
     "auto_submit_after_transcription": True,
-    "silence_timeout": 2.5,
+    "silence_timeout": 4.5,
+    "max_recording": 300.0,
+    "speech_threshold": 0.002,
+    "silence_threshold": 0.0015,
 }
 
 VALID_INPUT_MODES = {"hotkey", "media_key"}

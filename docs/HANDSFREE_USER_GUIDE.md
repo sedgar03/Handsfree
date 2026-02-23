@@ -98,7 +98,8 @@ Recommended baseline:
   "hotkey": "F18",
   "auto_submit": true,
   "auto_submit_after_transcription": true,
-  "silence_timeout": 2.5
+  "silence_timeout": 4.5,
+  "max_recording": 300
 }
 ```
 

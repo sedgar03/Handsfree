@@ -5,9 +5,12 @@
 # ///
 """Handsfree hook for Claude Code — summarize assistant output and speak it.
 
-Called by Claude Code on Stop, Notification, and PreCompact events.
+Called by Claude Code on Stop events only.
 Reads hook JSON from stdin, extracts the last assistant message from the
 transcript file, summarizes via claude -p, and speaks via Kokoro TTS.
+
+AskUserQuestion handling is done by ask_question_hook.py (PreToolUse).
+Permission handling is done by permission_hook.py (PermissionRequest).
 
 Exit immediately (zero overhead) when handsfree mode is disabled.
 """
@@ -25,43 +28,101 @@ if os.environ.get("HANDSFREE_ACTIVE"):
     sys.exit(0)
 os.environ["HANDSFREE_ACTIVE"] = "1"
 
-# Wire up src/ imports
+# Wire up src/ and hooks/ imports
 _repo_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_repo_root / "src"))
+sys.path.insert(0, str(_repo_root / "hooks"))
 
 from config import is_handsfree_enabled
+from shared import log as _log_shared
 
-_DEBUG_LOG = Path("/tmp/handsfree-tts-hook.log")
-_PENDING_PERMISSION_FILE = Path("/tmp/handsfree-pending-permission.json")
 _PERMISSION_RECENCY = 30  # seconds — skip if permission hook spoke recently
+_DEDUP_WINDOW = 30  # seconds — skip if same content hash was spoken recently
+
+
+def _session_path(base: str, session_id: str) -> Path:
+    """Build a session-scoped temp file path."""
+    tag = session_id[:8] if session_id else "unknown"
+    return Path(f"/tmp/handsfree-{base}-{tag}.json")
+
+
+def _dedup_lock_path(session_id: str) -> Path:
+    tag = session_id[:8] if session_id else "unknown"
+    return Path(f"/tmp/handsfree-dedup-{tag}.lock")
 
 
 def _log(msg: str):
-    import datetime
-    with open(_DEBUG_LOG, "a") as f:
-        f.write(f"{datetime.datetime.now().isoformat()} {msg}\n")
+    _log_shared(msg, tag="tts")
 
 
-_PENDING_QUESTION_FILE = Path("/tmp/handsfree-pending-question.json")
-_OPTION_LETTERS = "ABCD"
+def _dedup_check(content_key: str, session_id: str) -> bool:
+    """Return True if this content was already spoken recently (should skip).
 
-
-def _extract_last_assistant(transcript_path: str) -> dict | None:
-    """Read transcript JSONL and return the last assistant message content.
-
-    Returns a dict with:
-      - "text": concatenated text blocks (str or None)
-      - "ask_question": the AskUserQuestion tool_input dict, or None
+    Uses a file-based approach with a file lock to serialize concurrent
+    hook invocations (Stop + other hooks can fire near-simultaneously).
+    State files are session-scoped to avoid cross-session collisions.
     """
+    import fcntl
+    import hashlib
+    import time
+
+    spoken_file = _session_path("last-spoken", session_id)
+    lock_file = _dedup_lock_path(session_id)
+
+    content_hash = hashlib.md5(content_key.encode()).hexdigest()[:12]
+    now = time.time()
+
+    # File lock to serialize read-modify-write across concurrent hook processes
+    lock_fd = None
+    try:
+        lock_fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+
+        # Read existing state
+        state = {}
+        if spoken_file.exists():
+            try:
+                with open(spoken_file) as f:
+                    state = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                state = {}
+
+        # Check if this hash was spoken recently
+        last_time = state.get(content_hash, 0)
+        if now - last_time < _DEDUP_WINDOW:
+            _log(f"Dedup: skipping (hash={content_hash}, age={now - last_time:.1f}s)")
+            return True
+
+        # Record this speech
+        # Clean old entries while we're at it
+        state = {h: t for h, t in state.items() if now - t < _DEDUP_WINDOW * 2}
+        state[content_hash] = now
+        try:
+            import tempfile
+            tmp_fd, tmp_path = tempfile.mkstemp(dir="/tmp", suffix=".json")
+            with os.fdopen(tmp_fd, "w") as f:
+                json.dump(state, f)
+            os.rename(tmp_path, str(spoken_file))
+        except OSError:
+            pass
+
+        return False
+    finally:
+        if lock_fd is not None:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                os.close(lock_fd)
+            except OSError:
+                pass
+
+
+def _extract_last_assistant_text(transcript_path: str) -> str | None:
+    """Read transcript JSONL and return the last assistant message text."""
     path = Path(transcript_path)
     if not path.exists():
         return None
 
     last_text = None
-    last_text_pos = -1
-    last_question = None
-    last_question_pos = -1
-    pos = 0
     with open(path) as f:
         for line in f:
             line = line.strip()
@@ -76,97 +137,15 @@ def _extract_last_assistant(transcript_path: str) -> dict | None:
                 message = entry.get("message", {})
                 content = message.get("content", [])
                 texts = []
-                ask_question = None
                 for block in content:
-                    if isinstance(block, dict):
-                        if block.get("type") == "text":
-                            texts.append(block.get("text", ""))
-                        elif (
-                            block.get("type") == "tool_use"
-                            and block.get("name") == "AskUserQuestion"
-                        ):
-                            ask_question = block.get("input", {})
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        texts.append(block.get("text", ""))
                     elif isinstance(block, str):
                         texts.append(block)
                 if texts and "\n".join(texts).strip():
                     last_text = "\n".join(texts)
-                    last_text_pos = pos
-                if ask_question:
-                    last_question = ask_question
-                    last_question_pos = pos
-            pos += 1
 
-    if not last_text and not last_question:
-        return None
-    # Only return whichever came last — don't let a stale question
-    # override a more recent text response.
-    return {
-        "text": last_text if last_text_pos >= last_question_pos else None,
-        "ask_question": last_question if last_question_pos > last_text_pos else None,
-    }
-
-
-def _speak_ask_question(ask_input: dict) -> bool:
-    """Speak an AskUserQuestion with structured options. Returns True if spoken."""
-    import time
-
-    questions = ask_input.get("questions", [])
-    if not questions:
-        return False
-
-    try:
-        from tts import speak
-    except Exception as e:
-        _log(f"Failed to import tts for ask_question: {e}")
-        return False
-
-    # Write pending question file so the listener can pick it up
-    last_q = questions[-1]
-    all_options = [opt.get("label", "") for opt in last_q.get("options", [])]
-    state = {
-        "question": last_q.get("question", ""),
-        "options": all_options,
-        "timestamp": time.time(),
-    }
-    try:
-        import tempfile
-
-        tmp_fd, tmp_path = tempfile.mkstemp(dir="/tmp", suffix=".json")
-        with os.fdopen(tmp_fd, "w") as f:
-            json.dump(state, f)
-        os.rename(tmp_path, str(_PENDING_QUESTION_FILE))
-        _log(f"Wrote pending question file with {len(all_options)} options")
-    except OSError as e:
-        _log(f"Failed to write pending question file: {e}")
-
-    speak("Attention: there's a question on your computer.")
-    time.sleep(0.5)
-
-    for i, q in enumerate(questions):
-        question_text = q.get("question", "")
-        options = q.get("options", [])
-        if not question_text:
-            continue
-
-        speak(question_text)
-        time.sleep(0.4)
-
-        for j, opt in enumerate(options):
-            if j >= len(_OPTION_LETTERS):
-                break
-            letter = _OPTION_LETTERS[j]
-            label = opt.get("label", "")
-            description = opt.get("description", "")
-            if description:
-                speak(f"Option {letter}: {label}. {description}.")
-            else:
-                speak(f"Option {letter}: {label}.")
-            time.sleep(0.3)
-
-        if i < len(questions) - 1:
-            time.sleep(0.5)
-
-    return True
+    return last_text
 
 
 def main():
@@ -184,7 +163,10 @@ def main():
         _log("Failed to read stdin")
         return
 
-    _log(f"Got hook input keys: {list(hook_input.keys())}")
+    # Log event type for debugging
+    event_type = hook_input.get("event", hook_input.get("type", "unknown"))
+    session_id = hook_input.get("session_id", "?")
+    _log(f"Event: {event_type} | session: {session_id[:8]}")
 
     # Brief delay to let Claude Code finish writing the latest response
     # to the transcript JSONL. The Stop hook fires slightly before the
@@ -193,12 +175,13 @@ def main():
     _time.sleep(1.0)
 
     # Skip speaking if the permission hook already spoke recently.
-    # This avoids double-speech when both Notification[permission_prompt]
-    # and PermissionRequest fire for the same permission dialog.
-    if _PENDING_PERMISSION_FILE.exists():
+    # This avoids double-speech when both PermissionRequest and Stop
+    # fire for the same permission dialog.
+    pending_perm = _session_path("pending-permission", session_id)
+    if pending_perm.exists():
         try:
             import time
-            stat = _PENDING_PERMISSION_FILE.stat()
+            stat = pending_perm.stat()
             age = time.time() - stat.st_mtime
             if age < _PERMISSION_RECENCY:
                 _log(f"Pending permission file is {age:.1f}s old, skipping (permission hook already spoke)")
@@ -214,25 +197,15 @@ def main():
 
     _log(f"Transcript: {transcript_path}")
 
-    # Get last assistant message (text + any AskUserQuestion tool call)
-    last = _extract_last_assistant(transcript_path)
-    if not last:
-        _log("No assistant content found in transcript")
-        return
-
-    # If the last message contains AskUserQuestion, speak it with structured
-    # options instead of summarizing. This handles the case where Claude uses
-    # the AskUserQuestion tool and the PreToolUse hook didn't fire.
-    if last["ask_question"]:
-        _log("Detected AskUserQuestion in transcript, speaking options")
-        if _speak_ask_question(last["ask_question"]):
-            _log("Spoke AskUserQuestion options")
-            return
-        _log("AskUserQuestion speak failed, falling through to summarize")
-
-    text = last["text"]
+    # Get last assistant message text
+    text = _extract_last_assistant_text(transcript_path)
     if not text:
         _log("No assistant text found in transcript")
+        return
+
+    # Dedup check — same text shouldn't be spoken twice
+    if _dedup_check(f"text:{text[:500]}", session_id):
+        _log("Text already spoken (dedup), skipping")
         return
 
     _log(f"Got text ({len(text)} chars), summarizing...")

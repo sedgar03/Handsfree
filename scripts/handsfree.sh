@@ -16,6 +16,12 @@
 #   ./scripts/handsfree.sh --no-listen  # TTS only, no STT listener
 set -euo pipefail
 
+# Platform guard — macOS only
+if [ "$(uname -s)" != "Darwin" ]; then
+    echo "[handsfree] ERROR: Handsfree requires macOS (detected: $(uname -s))."
+    exit 1
+fi
+
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 UV="${UV:-}"
 CLAUDE="${CLAUDE:-}"
@@ -113,11 +119,12 @@ if [ "$NO_LISTEN" = false ]; then
         echo "[handsfree]   Hold F18 to record, release to transcribe + paste."
     fi
 
+    LISTENER_LOG="/tmp/handsfree-listener.log"
     # Apply mode override via env var if specified on CLI
     if [ -n "$INPUT_MODE_OVERRIDE" ]; then
-        HANDSFREE_INPUT_MODE="$INPUT_MODE_OVERRIDE" "$UV" run --script "$REPO_ROOT/src/listener.py" &>/dev/null &
+        HANDSFREE_INPUT_MODE="$INPUT_MODE_OVERRIDE" "$UV" run --script "$REPO_ROOT/src/listener.py" >>"$LISTENER_LOG" 2>&1 &
     else
-        "$UV" run --script "$REPO_ROOT/src/listener.py" &>/dev/null &
+        "$UV" run --script "$REPO_ROOT/src/listener.py" >>"$LISTENER_LOG" 2>&1 &
     fi
     LISTENER_PID=$!
     echo "[handsfree] Listener running (PID $LISTENER_PID)."

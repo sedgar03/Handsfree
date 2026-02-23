@@ -25,16 +25,16 @@ def _write_transcript(tmp_path: Path, entries: list[dict]) -> Path:
     return transcript
 
 
-def test_extract_last_assistant_missing_or_empty_transcript(tmp_path: Path, hook_module):
+def test_extract_last_assistant_text_missing_or_empty_transcript(tmp_path: Path, hook_module):
     missing = tmp_path / "missing.jsonl"
-    assert hook_module._extract_last_assistant(str(missing)) is None
+    assert hook_module._extract_last_assistant_text(str(missing)) is None
 
     empty = tmp_path / "empty.jsonl"
     empty.write_text("")
-    assert hook_module._extract_last_assistant(str(empty)) is None
+    assert hook_module._extract_last_assistant_text(str(empty)) is None
 
 
-def test_extract_last_assistant_text_only_entries(tmp_path: Path, hook_module):
+def test_extract_last_assistant_text_returns_last_text(tmp_path: Path, hook_module):
     transcript = _write_transcript(
         tmp_path,
         [
@@ -58,14 +58,12 @@ def test_extract_last_assistant_text_only_entries(tmp_path: Path, hook_module):
         ],
     )
 
-    result = hook_module._extract_last_assistant(str(transcript))
-    assert result == {
-        "text": "Final text block\nand trailing string",
-        "ask_question": None,
-    }
+    result = hook_module._extract_last_assistant_text(str(transcript))
+    assert result == "Final text block\nand trailing string"
 
 
-def test_extract_last_assistant_tool_use_only_entry(tmp_path: Path, hook_module):
+def test_extract_last_assistant_text_ignores_tool_use(tmp_path: Path, hook_module):
+    """AskUserQuestion tool_use blocks are ignored — handled by ask_question_hook."""
     ask_input = {
         "questions": [
             {
@@ -92,14 +90,13 @@ def test_extract_last_assistant_tool_use_only_entry(tmp_path: Path, hook_module)
         ],
     )
 
-    result = hook_module._extract_last_assistant(str(transcript))
-    assert result == {"text": None, "ask_question": ask_input}
+    # No text blocks → returns None
+    result = hook_module._extract_last_assistant_text(str(transcript))
+    assert result is None
 
 
-def test_extract_last_assistant_mixed_content_same_entry_prefers_text(tmp_path: Path, hook_module):
-    ask_input = {
-        "questions": [{"question": "Pick one", "options": [{"label": "A"}, {"label": "B"}]}]
-    }
+def test_extract_last_assistant_text_with_mixed_content(tmp_path: Path, hook_module):
+    """Text blocks are extracted; tool_use blocks are ignored."""
     transcript = _write_transcript(
         tmp_path,
         [
@@ -111,7 +108,7 @@ def test_extract_last_assistant_mixed_content_same_entry_prefers_text(tmp_path: 
                         {
                             "type": "tool_use",
                             "name": "AskUserQuestion",
-                            "input": ask_input,
+                            "input": {"questions": []},
                         },
                     ]
                 },
@@ -119,58 +116,18 @@ def test_extract_last_assistant_mixed_content_same_entry_prefers_text(tmp_path: 
         ],
     )
 
-    result = hook_module._extract_last_assistant(str(transcript))
-    assert result == {"text": "I did both things.", "ask_question": None}
+    result = hook_module._extract_last_assistant_text(str(transcript))
+    assert result == "I did both things."
 
 
-def test_extract_last_assistant_prefers_newer_question_over_older_text(tmp_path: Path, hook_module):
-    ask_input = {
-        "questions": [{"question": "Need input", "options": [{"label": "A"}, {"label": "B"}]}]
-    }
+def test_extract_last_assistant_text_returns_newest(tmp_path: Path, hook_module):
+    """Always returns the text from the most recent assistant message."""
     transcript = _write_transcript(
         tmp_path,
         [
             {
                 "type": "assistant",
                 "message": {"content": [{"type": "text", "text": "Old text"}]},
-            },
-            {
-                "type": "assistant",
-                "message": {
-                    "content": [
-                        {
-                            "type": "tool_use",
-                            "name": "AskUserQuestion",
-                            "input": ask_input,
-                        }
-                    ]
-                },
-            },
-        ],
-    )
-
-    result = hook_module._extract_last_assistant(str(transcript))
-    assert result == {"text": None, "ask_question": ask_input}
-
-
-def test_extract_last_assistant_prefers_newer_text_over_older_question(tmp_path: Path, hook_module):
-    ask_input = {
-        "questions": [{"question": "Old question", "options": [{"label": "A"}, {"label": "B"}]}]
-    }
-    transcript = _write_transcript(
-        tmp_path,
-        [
-            {
-                "type": "assistant",
-                "message": {
-                    "content": [
-                        {
-                            "type": "tool_use",
-                            "name": "AskUserQuestion",
-                            "input": ask_input,
-                        }
-                    ]
-                },
             },
             {
                 "type": "assistant",
@@ -183,5 +140,5 @@ def test_extract_last_assistant_prefers_newer_text_over_older_question(tmp_path:
         ],
     )
 
-    result = hook_module._extract_last_assistant(str(transcript))
-    assert result == {"text": "Newer plain text response", "ask_question": None}
+    result = hook_module._extract_last_assistant_text(str(transcript))
+    assert result == "Newer plain text response"

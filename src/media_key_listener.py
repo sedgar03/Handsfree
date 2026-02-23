@@ -47,8 +47,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from stt import SAMPLE_RATE, transcribe
 
-PENDING_QUESTION_FILE = Path("/tmp/handsfree-pending-question.json")
-PENDING_PERMISSION_FILE = Path("/tmp/handsfree-pending-permission.json")
+def _cleanup_pending_files():
+    """Remove all session-scoped pending question and permission files."""
+    import glob as _glob
+    for pattern in ("pending-question", "pending-permission"):
+        for f in _glob.glob(f"/tmp/handsfree-{pattern}-*.json"):
+            try:
+                Path(f).unlink(missing_ok=True)
+            except OSError:
+                pass
 
 # --- Media key constants (from IOKit/hidsystem/ev_keymap.h) ---
 NX_KEYTYPE_PLAY = 16
@@ -197,6 +204,8 @@ class MediaKeyListener:
         max_recording: float = 300.0,
         auto_submit: bool = True,
         auto_submit_after_transcription: bool = True,
+        speech_threshold: float | None = None,
+        silence_threshold: float | None = None,
     ):
         self.on_transcription = on_transcription or self._default_transcription_handler
         self.on_submit = on_submit
@@ -204,6 +213,8 @@ class MediaKeyListener:
         self.max_recording = max_recording or 300.0
         self.auto_submit = auto_submit
         self.auto_submit_after_transcription = auto_submit_after_transcription
+        self.speech_threshold = speech_threshold if speech_threshold is not None else SPEECH_THRESHOLD
+        self.silence_threshold = silence_threshold if silence_threshold is not None else SILENCE_THRESHOLD
 
         # State: idle, recording, transcribing
         self._state = "idle"
@@ -296,8 +307,8 @@ class MediaKeyListener:
         CALIBRATION_DURATION = 0.5  # seconds
         calibration_samples: list[float] = []
         noise_floor: float | None = None
-        effective_silence_threshold = SILENCE_THRESHOLD
-        effective_speech_threshold = SPEECH_THRESHOLD
+        effective_silence_threshold = self.silence_threshold
+        effective_speech_threshold = self.speech_threshold
 
         while not self._stop_event.is_set():
             time.sleep(CHUNK_DURATION)
@@ -322,10 +333,10 @@ class MediaKeyListener:
                 calibration_samples.append(rms)
                 if elapsed >= CALIBRATION_DURATION and calibration_samples:
                     noise_floor = sum(calibration_samples) / len(calibration_samples)
-                    # Silence = within 2x noise floor (but never below the base threshold)
-                    effective_silence_threshold = max(noise_floor * 2.0, SILENCE_THRESHOLD)
+                    # Silence = within 2x noise floor (but never below the configured threshold)
+                    effective_silence_threshold = max(noise_floor * 2.0, self.silence_threshold)
                     # Speech = at least 3x noise floor
-                    effective_speech_threshold = max(noise_floor * 3.0, SPEECH_THRESHOLD)
+                    effective_speech_threshold = max(noise_floor * 3.0, self.speech_threshold)
                     print(
                         f"[media-key] Noise floor: {noise_floor:.5f}, "
                         f"silence threshold: {effective_silence_threshold:.5f}, "
@@ -389,8 +400,7 @@ class MediaKeyListener:
         self._chunks = []
 
         if clear_pending_question:
-            PENDING_QUESTION_FILE.unlink(missing_ok=True)
-            PENDING_PERMISSION_FILE.unlink(missing_ok=True)
+            _cleanup_pending_files()
 
     def _finalize_recording(self):
         """Stop stream, transcribe audio, invoke callback."""

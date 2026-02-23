@@ -4,22 +4,25 @@ Handsfree integrates with Claude Code via hook commands configured in Claude's `
 
 ## What gets installed
 
-The Handsfree installer adds `hooks/handsfree_hook.py` to these Claude hook events:
+The installer registers three hooks on three events:
 
-1. `Stop`
-2. `PreCompact`
-3. `Notification` with matcher `idle_prompt`
-4. `Notification` with matcher `permission_prompt`
+| Event | Hook Script | Purpose |
+|---|---|---|
+| `Stop` | `hooks/handsfree_hook.py` | Summarize assistant output via `claude -p` and speak it |
+| `PreToolUse` (matcher: `AskUserQuestion`) | `hooks/ask_question_hook.py` | Speak the question and options so the user can answer by voice |
+| `PermissionRequest` | `hooks/permission_hook.py` | Speak the permission prompt so the user can allow/deny by voice |
 
-Each entry is:
+Each entry looks like:
 
 ```json
 {
   "type": "command",
-  "command": "/absolute/path/to/Handsfree/hooks/handsfree_hook.py",
+  "command": "/absolute/path/to/Handsfree/hooks/<hook>.py",
   "async": true
 }
 ```
+
+All hooks are async to avoid blocking Claude Code.
 
 ## Recommended install command
 
@@ -31,6 +34,14 @@ uv run hooks/install.py
 
 This is idempotent (safe to run multiple times).
 
+## Uninstall
+
+```bash
+uv run hooks/install.py uninstall
+```
+
+This also removes the legacy `auto_listen_hook.py` if present.
+
 ## Settings path resolution
 
 `hooks/install.py` resolves Claude `settings.json` in this order:
@@ -41,7 +52,7 @@ This is idempotent (safe to run multiple times).
 4. Existing `~/dotfiles/claude/settings.json`
 5. Default `~/.claude/settings.json` (created if missing)
 
-## Agent-friendly commands
+## Example commands
 
 Use these exact commands from repo root:
 
@@ -56,7 +67,7 @@ uv run hooks/install.py --settings ~/.claude/settings.json
 uv run hooks/install.py uninstall
 
 # Verify install
-rg -n "handsfree_hook.py" ~/.claude/settings.json ~/dotfiles/claude/settings.json 2>/dev/null
+rg -n "handsfree_hook.py\|ask_question_hook.py\|permission_hook.py" ~/.claude/settings.json 2>/dev/null
 ```
 
 If `claude` is not on PATH, set:
@@ -69,11 +80,10 @@ export HANDSFREE_CLAUDE_BIN="/absolute/path/to/claude"
 
 ## Manual JSON patch (if needed)
 
-If you do not use the installer, add the hook command above under:
+If you do not use the installer, add the hook entries under:
 
-1. `hooks.Stop[]`
-2. `hooks.PreCompact[]`
-3. `hooks.Notification[]` with `"matcher": "idle_prompt"`
-4. `hooks.Notification[]` with `"matcher": "permission_prompt"`
+1. `hooks.Stop[]` — `handsfree_hook.py`
+2. `hooks.PreToolUse[]` with `"matcher": "AskUserQuestion"` — `ask_question_hook.py`
+3. `hooks.PermissionRequest[]` — `permission_hook.py`
 
 Keep existing hooks in place; append Handsfree alongside them.

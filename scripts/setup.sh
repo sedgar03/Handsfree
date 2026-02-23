@@ -3,6 +3,12 @@
 # Downloads Kokoro models, installs Claude Code hooks, creates default config.
 set -euo pipefail
 
+# Platform guard — macOS only
+if [ "$(uname -s)" != "Darwin" ]; then
+    echo "ERROR: Handsfree requires macOS (detected: $(uname -s))."
+    exit 1
+fi
+
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MODELS_DIR="$REPO_ROOT/models"
 
@@ -30,7 +36,7 @@ if [ -f "$KOKORO_MODEL" ]; then
     echo "[✓] kokoro-v1.0.onnx already downloaded"
 else
     echo "Downloading kokoro-v1.0.onnx (~82MB)..."
-    curl -L -o "$KOKORO_MODEL" \
+    curl --fail -L -o "$KOKORO_MODEL" \
         "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx"
     echo "[✓] kokoro-v1.0.onnx downloaded"
 fi
@@ -39,12 +45,22 @@ if [ -f "$KOKORO_VOICES" ]; then
     echo "[✓] voices-v1.0.bin already downloaded"
 else
     echo "Downloading voices-v1.0.bin (~300MB)..."
-    curl -L -o "$KOKORO_VOICES" \
+    curl --fail -L -o "$KOKORO_VOICES" \
         "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
     echo "[✓] voices-v1.0.bin downloaded"
 fi
 
-# 3. Create default config if missing
+# 3. Pre-download Whisper model (cached by HuggingFace Hub)
+echo ""
+echo "--- Pre-downloading Whisper model ---"
+if uv run python3 -c "from huggingface_hub import snapshot_download; snapshot_download('mlx-community/whisper-large-v3-turbo', local_files_only=True)" &>/dev/null; then
+    echo "[✓] whisper-large-v3-turbo already cached"
+else
+    echo "Downloading whisper-large-v3-turbo (~800MB, cached by HuggingFace Hub)..."
+    uv run python3 -c "from huggingface_hub import snapshot_download; snapshot_download('mlx-community/whisper-large-v3-turbo')" || echo "[!] Whisper model download failed — will download on first use"
+fi
+
+# 4. Create default config if missing (renumbered after Whisper step)
 echo ""
 echo "--- Config ---"
 CONFIG_PATH="$HOME/.claude/voice-config.json"
@@ -64,21 +80,22 @@ else
   "hotkey": "F18",
   "auto_submit": true,
   "auto_submit_after_transcription": true,
-  "silence_timeout": 2.5
+  "silence_timeout": 4.5,
+  "max_recording": 300
 }
 EOF
     echo "[✓] Created default config: $CONFIG_PATH"
 fi
 
-# 4. Install Claude Code hooks
+# 5. Install Claude Code hooks
 echo ""
 echo "--- Installing hooks ---"
 uv run "$REPO_ROOT/hooks/install.py"
 
-# 5. Make hook executable
+# 6. Make hook executable
 chmod +x "$REPO_ROOT/hooks/handsfree_hook.py"
 
-# 6. Test TTS
+# 7. Test TTS
 echo ""
 echo "--- Quick test ---"
 echo "Testing TTS (you should hear speech)..."

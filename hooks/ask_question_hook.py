@@ -33,15 +33,21 @@ sys.path.insert(0, str(_repo_root / "src"))
 
 from config import is_handsfree_enabled
 
-_DEBUG_LOG = Path("/tmp/handsfree-tts-hook.log")
-_PENDING_QUESTION_FILE = Path("/tmp/handsfree-pending-question.json")
+# Wire up hooks/ imports for shared module
+sys.path.insert(0, str(_repo_root / "hooks"))
+from shared import log as _log_shared
+
 _OPTION_LETTERS = "ABCD"
 
 
+def _session_path(base: str, session_id: str) -> Path:
+    """Build a session-scoped temp file path."""
+    tag = session_id[:8] if session_id else "unknown"
+    return Path(f"/tmp/handsfree-{base}-{tag}.json")
+
+
 def _log(msg: str):
-    import datetime
-    with open(_DEBUG_LOG, "a") as f:
-        f.write(f"{datetime.datetime.now().isoformat()} [ask] {msg}\n")
+    _log_shared(msg, tag="ask")
 
 
 def main():
@@ -59,7 +65,8 @@ def main():
         _log("Failed to read stdin")
         return
 
-    _log(f"Got hook input keys: {list(hook_input.keys())}")
+    session_id = hook_input.get("session_id", "?")
+    _log(f"Got hook input keys: {list(hook_input.keys())} | session: {session_id[:8]}")
 
     # Extract tool_input.questions from the PreToolUse payload
     tool_input = hook_input.get("tool_input", {})
@@ -93,7 +100,8 @@ def main():
         tmp_fd, tmp_path = tempfile.mkstemp(dir="/tmp", suffix=".json")
         with os.fdopen(tmp_fd, "w") as f:
             json.dump(state, f)
-        os.rename(tmp_path, str(_PENDING_QUESTION_FILE))
+        pending_question_file = _session_path("pending-question", session_id)
+        os.rename(tmp_path, str(pending_question_file))
         _log(f"Wrote pending question file with {len(all_options)} options")
     except OSError as e:
         _log(f"Failed to write pending question file: {e}")

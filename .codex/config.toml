@@ -1,4 +1,0 @@
-# Project-level Codex CLI configuration
-# Codex auto-reads AGENTS.md. This fallback ensures it also reads CLAUDE.md
-# (the master operating doc) if AGENTS.md is missing or as a supplement.
-project_doc_fallback_filenames = ["CLAUDE.md"]
