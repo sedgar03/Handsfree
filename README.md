@@ -10,6 +10,20 @@ No paid TTS/STT APIs required.
 
 **Platform:** macOS 14+ (Sonoma) on Apple Silicon. Requires AirPods (or built-in mic) and terminal permissions for Accessibility + Input Monitoring.
 
+## Core Flow (Current Default)
+
+AirPods mode with auto-send enabled:
+
+1. Claude finishes talking or has a question
+2. Text to speech triggers and Claude's response is modified and read aloud
+3. The listener waits for the user to take an action
+4. User Single click stem to start recording
+5. Speak
+6. Silence (or manual stop stem click on airpod) ends recording
+7. Chime indicates listener is no longer listening
+8. Transcription completes
+9. Message auto-submits to Claude (whoosh cue)
+   
 ## Quick Start
 
 ```bash
@@ -21,6 +35,15 @@ No paid TTS/STT APIs required.
 ```
 
 When Claude exits, the launcher cleans up automatically.
+
+## Required macOS Permissions
+
+Grant these to the terminal app you use (`Terminal`, `iTerm2`, `Ghostty`, etc.):
+
+1. Microphone
+2. Accessibility
+3. Input Monitoring (recommended)
+4. Automation -> allow controlling `System Events`
 
 ## Full Usage Guide
 
@@ -37,25 +60,9 @@ See `docs/CLAUDE_HOOKS_SETUP.md` for:
 - settings path resolution (`~/.claude` vs `~/dotfiles/claude`)
 - manual installation and verification commands
 
-## Core Flow (Current Default)
 
-AirPods mode with auto-send enabled:
 
-1. Single click stem to start recording
-2. Speak
-3. Silence (or manual stop click) ends recording
-4. Chime indicates listener is no longer listening
-5. Transcription completes
-6. Message auto-submits to Claude (whoosh cue)
 
-## Required macOS Permissions
-
-Grant these to the terminal app you use (`Terminal`, `iTerm2`, `Ghostty`, etc.):
-
-1. Microphone
-2. Accessibility
-3. Input Monitoring (recommended)
-4. Automation -> allow controlling `System Events`
 
 ## Useful Commands
 
