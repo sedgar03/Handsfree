@@ -8,7 +8,12 @@ Local voice layer for Claude Code on macOS.
 
 No paid TTS/STT APIs required.
 
-**Platform:** macOS 14+ (Sonoma) on Apple Silicon. Requires AirPods (or built-in mic) and terminal permissions for Accessibility + Input Monitoring.
+**Requirements:**
+- macOS 14+ (Sonoma) on **Apple Silicon** (M1/M2/M3/M4) — Intel Macs are not supported
+- [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) installed
+- [uv](https://docs.astral.sh/uv/) installed (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
+- Python 3.11+
+- AirPods (or built-in mic)
 
 ## Core Flow (Current Default)
 
@@ -23,6 +28,7 @@ AirPods mode with auto-send enabled:
 7. Chime indicates listener is no longer listening
 8. Transcription completes
 9. Message auto-submits to Claude (whoosh cue)
+
 ## Quick Start
 
 ```bash

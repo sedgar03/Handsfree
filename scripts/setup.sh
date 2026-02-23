@@ -9,6 +9,14 @@ if [ "$(uname -s)" != "Darwin" ]; then
     exit 1
 fi
 
+# Architecture guard — Apple Silicon only (mlx-whisper requires it)
+if [ "$(uname -m)" != "arm64" ]; then
+    echo "ERROR: Handsfree requires Apple Silicon (M1/M2/M3/M4)."
+    echo "  Detected architecture: $(uname -m)"
+    echo "  mlx-whisper (used for speech-to-text) only runs on Apple Silicon."
+    exit 1
+fi
+
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MODELS_DIR="$REPO_ROOT/models"
 
@@ -16,13 +24,32 @@ echo "=== Handsfree Setup ==="
 echo "Repo: $REPO_ROOT"
 echo ""
 
-# 1. Check uv is installed
+# 1. Pre-flight checks
 if ! command -v uv &>/dev/null; then
     echo "ERROR: uv is not installed. Install it first:"
     echo "  curl -LsSf https://astral.sh/uv/install.sh | sh"
     exit 1
 fi
 echo "[✓] uv found: $(uv --version)"
+
+# Check Python 3.11+
+PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "0.0")
+PYTHON_MAJOR=$(echo "$PYTHON_VERSION" | cut -d. -f1)
+PYTHON_MINOR=$(echo "$PYTHON_VERSION" | cut -d. -f2)
+if [ "$PYTHON_MAJOR" -lt 3 ] || { [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -lt 11 ]; }; then
+    echo "ERROR: Python 3.11+ is required (found: $PYTHON_VERSION)."
+    echo "  Install via Homebrew: brew install python@3.12"
+    exit 1
+fi
+echo "[✓] Python $PYTHON_VERSION"
+
+# Check Claude Code CLI
+if ! command -v claude &>/dev/null; then
+    echo "ERROR: Claude Code CLI (claude) not found."
+    echo "  Install it first: https://docs.anthropic.com/en/docs/claude-code"
+    exit 1
+fi
+echo "[✓] claude found: $(claude --version 2>/dev/null | head -1)"
 
 # 2. Download Kokoro models
 echo ""
