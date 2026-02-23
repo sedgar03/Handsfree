@@ -46,7 +46,7 @@ Start a handsfree Claude session:
 If Claude settings live in a non-default location, reinstall hooks explicitly:
 
 ```bash
-uv run hooks/install.py --settings /path/to/settings.json
+uv run --script hooks/install.py --settings /path/to/settings.json
 ```
 
 The launcher will:
@@ -147,19 +147,19 @@ unset HANDSFREE_VOICE
 1. Test MPRemote AirPods event path:
 
 ```bash
-PYTHONUNBUFFERED=1 uv run src/test_mpremote.py
+PYTHONUNBUFFERED=1 uv run --script src/test_mpremote.py
 ```
 
 2. Test full listener only:
 
 ```bash
-PYTHONUNBUFFERED=1 HANDSFREE_INPUT_MODE=media_key uv run src/listener.py
+PYTHONUNBUFFERED=1 HANDSFREE_INPUT_MODE=media_key uv run --script src/listener.py
 ```
 
 3. Test TTS:
 
 ```bash
-uv run src/tts.py "Handsfree test"
+uv run --script src/tts.py "Handsfree test"
 ```
 
 ## Troubleshooting
@@ -183,7 +183,7 @@ uv run src/tts.py "Handsfree test"
 - Reinstall hooks:
 
 ```bash
-uv run hooks/install.py
+uv run --script hooks/install.py
 ```
 
 - If Claude CLI is not on PATH for hook subprocesses, set:

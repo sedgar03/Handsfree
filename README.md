@@ -76,19 +76,19 @@ See `docs/CLAUDE_HOOKS_SETUP.md` for:
 ./scripts/handsfree.sh --check
 
 # TTS test
-uv run src/tts.py "Handsfree test"
+uv run --script src/tts.py "Handsfree test"
 
 # AirPods remote command test
-PYTHONUNBUFFERED=1 uv run src/test_mpremote.py
+PYTHONUNBUFFERED=1 uv run --script src/test_mpremote.py
 
 # Listener only
-PYTHONUNBUFFERED=1 HANDSFREE_INPUT_MODE=media_key uv run src/listener.py
+PYTHONUNBUFFERED=1 HANDSFREE_INPUT_MODE=media_key uv run --script src/listener.py
 
 # Reinstall Claude hooks
-uv run hooks/install.py
+uv run --script hooks/install.py
 
 # Reinstall to a specific Claude settings file
-uv run hooks/install.py --settings ~/.claude/settings.json
+uv run --script hooks/install.py --settings ~/.claude/settings.json
 ```
 
 ## Config

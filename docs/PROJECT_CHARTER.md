@@ -178,10 +178,9 @@ This adds ~1-2s latency (API call) but produces much better summaries than heuri
 
 ```
   Phase 1 components, plus:
-  - audio.py routes TTS output → AirPods (via CoreAudio device selection)
-  - audio.py routes mic input ← AirPod mic
-  - stem_listener.py detects AirPod stem tap (via CGEventTap media keys)
-  - listener.py switches between hotkey and stem-click based on config
+  - media_key_listener.py detects AirPod stem clicks (MPRemoteCommandCenter + fallback paths)
+  - airpods_check.py reports AirPods connection status before listener startup
+  - listener.py switches between hotkey and stem-click modes based on config
 ```
 
 ### Components
@@ -190,21 +189,23 @@ This is a flat repo with scripts — not a Python package. Hooks point directly 
 
 ```
 src/
-  tts.py             — Kokoro TTS wrapper (queue, play, device routing)
+  tts.py             — Kokoro TTS wrapper (serialized playback + macOS say fallback)
   stt.py             — mlx-whisper wrapper
   summarizer.py      — claude -p summarization with verbosity levels
-  stem_listener.py   — AirPod stem-click detection (PyObjC CGEventTap)
+  media_key_listener.py — AirPod stem-click detection + VAD auto-stop
   hotkey_listener.py — Global hotkey detection
   listener.py        — Unified input listener (switches stem/hotkey based on config)
-  audio.py           — Audio device discovery + routing (AirPods detection)
-  config.py          — Read/write ~/.claude/voice-config.json
-  queue.py           — TTS audio queue (FIFO, non-blocking)
+  airpods_check.py   — AirPods connection status helper
+  config.py          — Read ~/.claude/voice-config.json
 hooks/
   handsfree_hook.py  — Main hook script (reads stdin JSON, summarizes, speaks)
+  ask_question_hook.py — AskUserQuestion voice alert hook
+  permission_hook.py — PermissionRequest voice alert hook
   install.py         — Adds/removes hook entries in Claude Code settings.json
 scripts/
-  download_models.py — Downloads Kokoro + Whisper models
+  check_permissions.py — macOS permission diagnostics
   setup.sh           — One-command setup (deps + models + hooks)
+  handsfree.sh       — Launcher (permissions + listener + claude)
 models/              — Downloaded models live here (gitignored)
 ```
 

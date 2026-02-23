@@ -7,7 +7,7 @@
 | `setup.sh` | One-time setup: models, config, Claude hooks, smoke test | `./scripts/setup.sh` |
 | `handsfree.sh` | Launch handsfree Claude session (listener + hooks mode toggle) | `./scripts/handsfree.sh --media-key` |
 | `check_permissions.sh` | Wrapper to run permission diagnostics | `./scripts/check_permissions.sh` |
-| `check_permissions.py` | Detailed permission checks (called by shell wrapper) | `uv run scripts/check_permissions.py` |
+| `check_permissions.py` | Detailed permission checks (called by shell wrapper) | `uv run --script scripts/check_permissions.py` |
 
 ## Guidelines
 

@@ -29,7 +29,7 @@ All hooks are async to avoid blocking Claude Code.
 From repo root:
 
 ```bash
-uv run hooks/install.py
+uv run --script hooks/install.py
 ```
 
 This is idempotent (safe to run multiple times).
@@ -37,7 +37,7 @@ This is idempotent (safe to run multiple times).
 ## Uninstall
 
 ```bash
-uv run hooks/install.py uninstall
+uv run --script hooks/install.py uninstall
 ```
 
 This also removes the legacy `auto_listen_hook.py` if present.
@@ -58,13 +58,13 @@ Use these exact commands from repo root:
 
 ```bash
 # Install hooks
-uv run hooks/install.py
+uv run --script hooks/install.py
 
 # Install to an explicit settings file
-uv run hooks/install.py --settings ~/.claude/settings.json
+uv run --script hooks/install.py --settings ~/.claude/settings.json
 
 # Remove hooks
-uv run hooks/install.py uninstall
+uv run --script hooks/install.py uninstall
 
 # Verify install
 rg -n "handsfree_hook.py\|ask_question_hook.py\|permission_hook.py" ~/.claude/settings.json 2>/dev/null

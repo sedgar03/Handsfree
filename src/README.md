@@ -13,7 +13,6 @@
 | `listener.py` | Unified input listener — routes to media_key or hotkey mode, handles text injection and question/permission answering |
 | `media_key_listener.py` | AirPods stem-click detection via MPRemoteCommandCenter + CGEventTap fallback, VAD auto-stop, recording state machine |
 | `hotkey_listener.py` | Global hotkey detection via PyObjC CGEventTap (F18 hold-to-record) |
-| `audio.py` | Audio device discovery and routing (AirPods detection via CoreAudio) |
 | `airpods_check.py` | Check if AirPods are connected and print status |
 | `diagnose_events.py` | Diagnostic tool — logs all media key backends and decoded event data |
 | `test_mpremote.py` | Live test for MPRemoteCommandCenter stem-click callbacks |
@@ -26,10 +25,10 @@
 ./scripts/setup.sh
 
 # Test TTS
-uv run src/tts.py "Hello from Handsfree"
+uv run --script src/tts.py "Hello from Handsfree"
 
 # Test STT (record and transcribe)
-uv run src/stt.py
+uv run --script src/stt.py
 
 # Start listener
 PYTHONUNBUFFERED=1 uv run --script src/listener.py

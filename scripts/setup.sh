@@ -80,11 +80,11 @@ fi
 # 3. Pre-download Whisper model (cached by HuggingFace Hub)
 echo ""
 echo "--- Pre-downloading Whisper model ---"
-if uv run python3 -c "from huggingface_hub import snapshot_download; snapshot_download('mlx-community/whisper-large-v3-turbo', local_files_only=True)" &>/dev/null; then
+if uv run --with huggingface-hub python3 -c "from huggingface_hub import snapshot_download; snapshot_download('mlx-community/whisper-large-v3-turbo', local_files_only=True)" &>/dev/null; then
     echo "[✓] whisper-large-v3-turbo already cached"
 else
     echo "Downloading whisper-large-v3-turbo (~800MB, cached by HuggingFace Hub)..."
-    uv run python3 -c "from huggingface_hub import snapshot_download; snapshot_download('mlx-community/whisper-large-v3-turbo')" || echo "[!] Whisper model download failed — will download on first use"
+    uv run --with huggingface-hub python3 -c "from huggingface_hub import snapshot_download; snapshot_download('mlx-community/whisper-large-v3-turbo')" || echo "[!] Whisper model download failed — will download on first use"
 fi
 
 # 4. Create default config if missing (renumbered after Whisper step)
@@ -117,7 +117,7 @@ fi
 # 5. Install Claude Code hooks
 echo ""
 echo "--- Installing hooks ---"
-uv run "$REPO_ROOT/hooks/install.py"
+uv run --script "$REPO_ROOT/hooks/install.py"
 
 # 6. Make hook executable
 chmod +x "$REPO_ROOT/hooks/handsfree_hook.py"
@@ -126,7 +126,7 @@ chmod +x "$REPO_ROOT/hooks/handsfree_hook.py"
 echo ""
 echo "--- Quick test ---"
 echo "Testing TTS (you should hear speech)..."
-uv run "$REPO_ROOT/src/tts.py" "Handsfree setup complete"
+uv run --script "$REPO_ROOT/src/tts.py" "Handsfree setup complete"
 
 echo ""
 echo "=== Setup Complete ==="
