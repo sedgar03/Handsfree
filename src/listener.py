@@ -22,6 +22,7 @@ or double-clicks AirPods stem to auto-submit.
 
 from __future__ import annotations
 
+import glob
 import json
 import re
 import signal
@@ -39,11 +40,24 @@ from hotkey_listener import HotkeyListener
 from media_key_listener import MediaKeyListener
 
 
-PENDING_QUESTION_FILE = Path("/tmp/handsfree-pending-question.json")
 PENDING_QUESTION_MAX_AGE = 300  # 5 minutes
-
-PENDING_PERMISSION_FILE = Path("/tmp/handsfree-pending-permission.json")
 PENDING_PERMISSION_MAX_AGE = 300  # 5 minutes
+
+
+def _find_pending_file(prefix: str) -> Path | None:
+    """Find the most recent session-scoped pending file matching a prefix.
+
+    Hooks write files like /tmp/handsfree-pending-question-{session[:8]}.json.
+    The listener doesn't know the session_id, so it globs for matching files
+    and returns the most recently modified one.
+    """
+    pattern = f"/tmp/handsfree-{prefix}-*.json"
+    matches = glob.glob(pattern)
+    if not matches:
+        return None
+    # Return the most recently modified match
+    return Path(max(matches, key=lambda p: Path(p).stat().st_mtime))
+
 
 _OPTION_LETTERS = "ABCD"
 
@@ -169,27 +183,28 @@ def _try_answer_question(text: str) -> bool:
     Returns True if the question was handled (caller should NOT inject text).
     Returns False to fall through to normal text injection.
     """
-    if not PENDING_QUESTION_FILE.exists():
+    pending_file = _find_pending_file("pending-question")
+    if pending_file is None:
         return False
 
     try:
-        with open(PENDING_QUESTION_FILE) as f:
+        with open(pending_file) as f:
             state = json.load(f)
     except (json.JSONDecodeError, OSError):
         # Corrupt or unreadable — clean up and fall through
-        PENDING_QUESTION_FILE.unlink(missing_ok=True)
+        pending_file.unlink(missing_ok=True)
         return False
 
     # Expire stale questions
     ts = state.get("timestamp", 0)
     if time.time() - ts > PENDING_QUESTION_MAX_AGE:
         print("[listener] Pending question expired, ignoring.", file=sys.stderr)
-        PENDING_QUESTION_FILE.unlink(missing_ok=True)
+        pending_file.unlink(missing_ok=True)
         return False
 
     options = state.get("options", [])
     if not options:
-        PENDING_QUESTION_FILE.unlink(missing_ok=True)
+        pending_file.unlink(missing_ok=True)
         return False
 
     index = _parse_option(text, options)
@@ -200,7 +215,7 @@ def _try_answer_question(text: str) -> bool:
 
     # Handle cancel — clear file immediately
     if index == -1:
-        PENDING_QUESTION_FILE.unlink(missing_ok=True)
+        pending_file.unlink(missing_ok=True)
         print("[listener] Voice cancel — cleared pending question.", file=sys.stderr)
         try:
             from tts import speak
@@ -219,7 +234,7 @@ def _try_answer_question(text: str) -> bool:
         return True  # Still consumed — don't inject raw text
 
     # Success — NOW delete the file
-    PENDING_QUESTION_FILE.unlink(missing_ok=True)
+    pending_file.unlink(missing_ok=True)
 
     # Speak confirmation
     try:
@@ -240,21 +255,22 @@ def _try_answer_permission(text: str) -> bool:
     Returns True if the permission was handled (caller should NOT inject text).
     Returns False to fall through to normal text injection.
     """
-    if not PENDING_PERMISSION_FILE.exists():
+    perm_file = _find_pending_file("pending-permission")
+    if perm_file is None:
         return False
 
     try:
-        with open(PENDING_PERMISSION_FILE) as f:
+        with open(perm_file) as f:
             state = json.load(f)
     except (json.JSONDecodeError, OSError):
-        PENDING_PERMISSION_FILE.unlink(missing_ok=True)
+        perm_file.unlink(missing_ok=True)
         return False
 
     # Expire stale permissions
     ts = state.get("timestamp", 0)
     if time.time() - ts > PENDING_PERMISSION_MAX_AGE:
         print("[listener] Pending permission expired, ignoring.", file=sys.stderr)
-        PENDING_PERMISSION_FILE.unlink(missing_ok=True)
+        perm_file.unlink(missing_ok=True)
         return False
 
     normalized = re.sub(r"[^\w\s]", "", text.lower()).strip()
@@ -288,7 +304,7 @@ def _try_answer_permission(text: str) -> bool:
         return True  # Still consumed — don't inject raw text
 
     # Success — delete the file
-    PENDING_PERMISSION_FILE.unlink(missing_ok=True)
+    perm_file.unlink(missing_ok=True)
 
     # Speak confirmation
     try:
@@ -380,15 +396,19 @@ def main():
             print("  Auto-submit after transcription (no second click required)", file=sys.stderr)
         elif auto_submit:
             print("  Double click in idle → submit (Enter)", file=sys.stderr)
-        print(f"  Silence timeout: {config.get('silence_timeout', 2.5)}s", file=sys.stderr)
+        print(f"  Silence timeout: {config.get('silence_timeout', 4.5)}s", file=sys.stderr)
+        print(f"  Max recording: {config.get('max_recording', 300.0)}s", file=sys.stderr)
         print("", file=sys.stderr)
 
         listener = MediaKeyListener(
             on_transcription=inject_text,
             on_submit=submit_text if auto_submit else None,
-            silence_timeout=config.get("silence_timeout", 2.5),
+            silence_timeout=config.get("silence_timeout", 4.5),
+            max_recording=config.get("max_recording", 300.0),
             auto_submit=auto_submit,
             auto_submit_after_transcription=auto_submit_after_tx,
+            speech_threshold=config.get("speech_threshold"),
+            silence_threshold=config.get("silence_threshold"),
         )
     else:
         hotkey = config.get("hotkey", "F18")

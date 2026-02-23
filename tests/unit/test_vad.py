@@ -1,58 +1,12 @@
 from __future__ import annotations
 
-import importlib.util
 import sys
-import types
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-
-def _load_media_key_module(monkeypatch):
-    """Load media_key_listener with lightweight stubs for macOS-only deps."""
-    fake_objc = types.ModuleType("objc")
-    fake_objc.ivar = lambda *args, **kwargs: None
-
-    def typed_selector(_signature):
-        def decorator(func):
-            return func
-
-        return decorator
-
-    fake_objc.typedSelector = typed_selector
-    fake_objc.loadBundle = lambda *args, **kwargs: None
-    fake_objc.lookUpClass = lambda _name: type("DummyClass", (), {})
-    monkeypatch.setitem(sys.modules, "objc", fake_objc)
-
-    fake_foundation = types.ModuleType("Foundation")
-    fake_foundation.NSObject = object
-    monkeypatch.setitem(sys.modules, "Foundation", fake_foundation)
-
-    class DummyStream:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def start(self):
-            pass
-
-        def stop(self):
-            pass
-
-        def close(self):
-            pass
-
-    fake_sd = types.ModuleType("sounddevice")
-    fake_sd.InputStream = DummyStream
-    fake_sd.OutputStream = DummyStream
-    monkeypatch.setitem(sys.modules, "sounddevice", fake_sd)
-
-    module_path = Path(__file__).resolve().parents[2] / "src" / "media_key_listener.py"
-    spec = importlib.util.spec_from_file_location("media_key_listener_vad_test", module_path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
+from conftest_helpers import load_media_key_module
 
 
 def _run_vad_sequence(
@@ -108,12 +62,25 @@ def _run_vad_sequence(
 
 
 def test_vad_detects_speech_and_auto_stops_on_silence(monkeypatch):
-    media_key_module = _load_media_key_module(monkeypatch)
+    media_key_module = load_media_key_module(monkeypatch)
+
+    # First ~5 chunks are calibration (0.5s / 0.12s per tick ≈ 4-5 ticks).
+    # Use low RMS for calibration, then speech above 3x noise floor, then silence.
+    # Noise floor ≈ 0.001, so speech threshold ≈ max(0.001*3, 0.002) = 0.003,
+    # silence threshold ≈ max(0.001*2, 0.0015) = 0.002.
+    rms_values = [
+        # Calibration phase (~0.5s worth)
+        0.001, 0.001, 0.001, 0.001, 0.001,
+        # Speech (above 3x noise floor = 0.003)
+        0.010, 0.008, 0.012,
+        # Silence (below 2x noise floor = 0.002)
+        0.0005, 0.0005, 0.0005,
+    ]
 
     finalized, cancelled = _run_vad_sequence(
         media_key_module,
         monkeypatch,
-        rms_values=[0.0026, 0.0024, 0.0010, 0.0010, 0.0010],
+        rms_values=rms_values,
         silence_timeout=0.2,
     )
 
@@ -122,13 +89,24 @@ def test_vad_detects_speech_and_auto_stops_on_silence(monkeypatch):
 
 
 def test_vad_cancels_if_speech_never_starts(monkeypatch):
-    media_key_module = _load_media_key_module(monkeypatch)
+    media_key_module = load_media_key_module(monkeypatch)
+
+    # All values at noise floor level — speech never starts.
+    # After calibration, speech threshold ≈ max(0.001*3, 0.002) = 0.003.
+    # All subsequent values stay below that.
+    rms_values = [
+        # Calibration phase
+        0.001, 0.001, 0.001, 0.001, 0.001,
+        # No speech — stays below speech threshold
+        0.0010, 0.0011, 0.0012, 0.0010, 0.0011,
+        0.0010, 0.0011, 0.0012, 0.0010, 0.0011,
+    ]
 
     finalized, cancelled = _run_vad_sequence(
         media_key_module,
         monkeypatch,
-        rms_values=[0.0010, 0.0011, 0.0012, 0.0010, 0.0011],
-        max_wait_for_speech=0.25,
+        rms_values=rms_values,
+        max_wait_for_speech=0.8,
     )
 
     assert finalized == 0
@@ -138,8 +116,20 @@ def test_vad_cancels_if_speech_never_starts(monkeypatch):
 @pytest.mark.parametrize(
     "rms_values, expected_finalize, expected_cancel",
     [
-        ([0.0019, 0.0018, 0.0019, 0.0018], 0, 1),
-        ([0.0021, 0.0020, 0.0010, 0.0010, 0.0010], 1, 0),
+        # Below speech threshold after calibration — never starts speaking → cancel
+        (
+            [0.001, 0.001, 0.001, 0.001, 0.001,   # calibration
+             0.0019, 0.0018, 0.0019, 0.0018,        # below 3x noise = 0.003
+             0.0019, 0.0018, 0.0019, 0.0018],
+            0, 1,
+        ),
+        # Above speech threshold then drops to silence → finalize
+        (
+            [0.001, 0.001, 0.001, 0.001, 0.001,   # calibration
+             0.010, 0.008,                          # speech (above 0.003)
+             0.0005, 0.0005, 0.0005],               # silence (below 0.002)
+            1, 0,
+        ),
     ],
 )
 def test_vad_threshold_behavior_includes_airpods_level_signals(
@@ -148,13 +138,13 @@ def test_vad_threshold_behavior_includes_airpods_level_signals(
     expected_finalize,
     expected_cancel,
 ):
-    media_key_module = _load_media_key_module(monkeypatch)
+    media_key_module = load_media_key_module(monkeypatch)
 
     finalized, cancelled = _run_vad_sequence(
         media_key_module,
         monkeypatch,
         rms_values=rms_values,
-        max_wait_for_speech=0.35,
+        max_wait_for_speech=1.0,
         silence_timeout=0.2,
     )
 

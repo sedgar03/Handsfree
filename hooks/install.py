@@ -5,8 +5,9 @@
 # ///
 """Install handsfree hooks into Claude Code settings.json.
 
-Adds handsfree_hook.py to Stop, Notification, and PreCompact events,
-and ask_question_hook.py to PreToolUse (AskUserQuestion) event,
+Adds handsfree_hook.py to Stop event,
+ask_question_hook.py to PreToolUse (AskUserQuestion) event,
+and permission_hook.py to PermissionRequest event,
 alongside existing hooks (AOE sounds, etc). Idempotent — safe to re-run.
 """
 
@@ -15,14 +16,21 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HOOK_SCRIPT = REPO_ROOT / "hooks" / "handsfree_hook.py"
 ASK_QUESTION_HOOK_SCRIPT = REPO_ROOT / "hooks" / "ask_question_hook.py"
 PERMISSION_HOOK_SCRIPT = REPO_ROOT / "hooks" / "permission_hook.py"
-HANDSFREE_HOOK_NAMES = {HOOK_SCRIPT.name, ASK_QUESTION_HOOK_SCRIPT.name, PERMISSION_HOOK_SCRIPT.name}
+HANDSFREE_HOOK_NAMES = {
+    HOOK_SCRIPT.name,
+    ASK_QUESTION_HOOK_SCRIPT.name,
+    PERMISSION_HOOK_SCRIPT.name,
+    "auto_listen_hook.py",  # legacy — ensure uninstaller removes it
+}
 CANDIDATE_SETTINGS_PATHS = [
     Path.home() / ".claude" / "settings.json",
     Path.home() / "dotfiles" / "claude" / "settings.json",
@@ -51,19 +59,50 @@ def _resolve_settings_path(explicit: str | None = None) -> Path:
 
 
 def _load_settings(settings_path: Path) -> dict:
-    """Load existing settings or return empty structure."""
-    if settings_path.exists():
+    """Load existing settings or return empty structure.
+
+    If the file is malformed JSON, backs it up and returns empty dict.
+    """
+    if not settings_path.exists():
+        return {}
+    try:
         with open(settings_path) as f:
             return json.load(f)
-    return {}
+    except (json.JSONDecodeError, OSError) as e:
+        # Backup the malformed file so the user doesn't lose it
+        backup_path = settings_path.with_suffix(".json.bak")
+        try:
+            shutil.copy2(settings_path, backup_path)
+            print(
+                f"Warning: malformed settings.json — backed up to {backup_path}",
+                file=sys.stderr,
+            )
+        except OSError:
+            print(
+                f"Warning: malformed settings.json and backup failed: {e}",
+                file=sys.stderr,
+            )
+        return {}
 
 
 def _save_settings(settings_path: Path, settings: dict):
-    """Write settings back to disk."""
+    """Write settings atomically (write to temp file, then rename)."""
     settings_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(settings_path, "w") as f:
-        json.dump(settings, f, indent=2)
-        f.write("\n")
+    tmp_fd, tmp_path = tempfile.mkstemp(
+        dir=str(settings_path.parent), suffix=".json.tmp"
+    )
+    try:
+        with os.fdopen(tmp_fd, "w") as f:
+            json.dump(settings, f, indent=2)
+            f.write("\n")
+        os.rename(tmp_path, str(settings_path))
+    except BaseException:
+        # Clean up temp file on failure
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def _hook_entry(script: Path = HOOK_SCRIPT) -> dict:
@@ -126,11 +165,10 @@ def install(settings_path: Path):
 
     settings = _load_settings(settings_path)
 
-    # Add to Stop, PreCompact, and Notification events
+    # handsfree_hook.py on Stop only — summarize + speak the final response.
+    # PreCompact and Notification events are handled by dedicated hooks or
+    # aren't useful for TTS (permission_prompt is covered by permission_hook).
     _add_hook_to_event(settings, "Stop")
-    _add_hook_to_event(settings, "PreCompact")
-    _add_hook_to_event(settings, "Notification", matcher="idle_prompt")
-    _add_hook_to_event(settings, "Notification", matcher="permission_prompt")
 
     # AskUserQuestion TTS alert (must be async to avoid bug #12031)
     _add_hook_to_event(

@@ -83,10 +83,12 @@ def summarize(text: str, verbosity: str | None = None) -> str:
                 file=sys.stderr,
             )
             return text[:200] if len(text) > 200 else text
-        # Pass HANDSFREE_ACTIVE env var so claude -p's hooks know not to recurse
+        # Pass HANDSFREE_ACTIVE env var so claude -p's hooks know not to recurse.
+        # Use stdin ("-p -") to avoid OS arg-size limits on long transcripts.
         env = {**os.environ, "HANDSFREE_ACTIVE": "1"}
         result = subprocess.run(
-            [claude_bin, "-p", full_prompt],
+            [claude_bin, "-p", "-"],
+            input=full_prompt,
             capture_output=True,
             text=True,
             timeout=30,

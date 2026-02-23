@@ -55,3 +55,17 @@ yarn-error.log*
 models/
 *.pyc
 __pycache__/
+
+# Agentic Workflow & Internal Project Management
+AGENTS.md
+CLAUDE.md
+TASKS.md
+.codex/
+.claude/
+docs/HANDOFF.md
+docs/WORKSTREAMS.md
+docs/DECISION_LOG.md
+docs/LEARNINGS.md
+docs/COORDINATION.md
+docs/ORCHESTRATION_GUIDE.md
+docs/review-voice-response-plan.md

@@ -8,6 +8,8 @@ Local voice layer for Claude Code on macOS.
 
 No paid TTS/STT APIs required.
 
+**Platform:** macOS 14+ (Sonoma) on Apple Silicon. Requires AirPods (or built-in mic) and terminal permissions for Accessibility + Input Monitoring.
+
 ## Quick Start
 
 ```bash
@@ -33,7 +35,7 @@ See `docs/CLAUDE_HOOKS_SETUP.md` for:
 
 - exactly how Claude Code hooks are installed
 - settings path resolution (`~/.claude` vs `~/dotfiles/claude`)
-- agent-friendly install/verify commands
+- manual installation and verification commands
 
 ## Core Flow (Current Default)
 
@@ -100,7 +102,8 @@ Example:
   "hotkey": "F18",
   "auto_submit": true,
   "auto_submit_after_transcription": true,
-  "silence_timeout": 2.5
+  "silence_timeout": 4.5,
+  "max_recording": 300
 }
 ```
 

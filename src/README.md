@@ -1,24 +1,36 @@
 # Source Code — Module Map
 
-> This file maps source code modules to their owners and responsibilities. Update when modules are created or ownership changes.
+> This file maps source code modules to their responsibilities.
 
 ## Module Map
 
-| Module | Owner | Purpose | Interface Contract |
-|---|---|---|---|
-<!-- | `src/core/` | `claude-1` | Business logic | `docs/contracts/core-api.md` | -->
-<!-- | `src/api/` | `codex-1` | HTTP interface | `docs/contracts/api-core.md` | -->
+| Module | Purpose |
+|---|---|
+| `config.py` | Read `~/.claude/voice-config.json` with defaults, check handsfree toggle |
+| `tts.py` | Kokoro TTS wrapper — `speak()`, lazy model init, macOS `say` fallback, file lock serialization |
+| `stt.py` | mlx-whisper STT wrapper — record from mic via sounddevice, transcribe audio |
+| `summarizer.py` | Summarize Claude output via `claude -p` with terse/detailed prompts |
+| `listener.py` | Unified input listener — routes to media_key or hotkey mode, handles text injection and question/permission answering |
+| `media_key_listener.py` | AirPods stem-click detection via MPRemoteCommandCenter + CGEventTap fallback, VAD auto-stop, recording state machine |
+| `hotkey_listener.py` | Global hotkey detection via PyObjC CGEventTap (F18 hold-to-record) |
+| `audio.py` | Audio device discovery and routing (AirPods detection via CoreAudio) |
+| `airpods_check.py` | Check if AirPods are connected and print status |
+| `diagnose_events.py` | Diagnostic tool — logs all media key backends and decoded event data |
+| `test_mpremote.py` | Live test for MPRemoteCommandCenter stem-click callbacks |
+| `test_mpremote_inputstream.py` | Test whether MPRemote callbacks drop during active `sd.InputStream` |
 
 ## Getting Started
 
-<!-- Add language-specific setup instructions here -->
 ```bash
-# TODO: Add setup instructions
+# Run setup (downloads models, installs hooks, creates config)
+./scripts/setup.sh
+
+# Test TTS
+uv run src/tts.py "Hello from Handsfree"
+
+# Test STT (record and transcribe)
+uv run src/stt.py
+
+# Start listener
+PYTHONUNBUFFERED=1 uv run --script src/listener.py
 ```
-
-## Module Guidelines
-
-- Each module should have a single clear responsibility
-- Cross-module communication goes through defined interfaces (see `docs/contracts/`)
-- Module owner is responsible for tests within their module
-- Do not import directly from another module's internals — use the public interface
