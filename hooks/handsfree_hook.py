@@ -36,7 +36,7 @@ sys.path.insert(0, str(_repo_root / "hooks"))
 from config import is_handsfree_enabled
 from shared import log as _log_shared
 
-_PERMISSION_RECENCY = 30  # seconds — skip if permission hook spoke recently
+_SPECIALIZED_HOOK_RECENCY = 60  # seconds — skip if a specialized hook spoke recently
 _DEDUP_WINDOW = 30  # seconds — skip if same content hash was spoken recently
 
 
@@ -174,20 +174,20 @@ def main():
     import time as _time
     _time.sleep(1.0)
 
-    # Skip speaking if the permission hook already spoke recently.
-    # This avoids double-speech when both PermissionRequest and Stop
-    # fire for the same permission dialog.
-    pending_perm = _session_path("pending-permission", session_id)
-    if pending_perm.exists():
-        try:
-            import time
-            stat = pending_perm.stat()
-            age = time.time() - stat.st_mtime
-            if age < _PERMISSION_RECENCY:
-                _log(f"Pending permission file is {age:.1f}s old, skipping (permission hook already spoke)")
-                return
-        except OSError:
-            pass
+    # Skip speaking if a specialized hook (permission or ask-question)
+    # already spoke recently. This avoids double-speech when both
+    # PermissionRequest/PreToolUse and Stop fire for the same event.
+    import time
+    for hook_name in ("pending-permission", "pending-question"):
+        pending = _session_path(hook_name, session_id)
+        if pending.exists():
+            try:
+                age = time.time() - pending.stat().st_mtime
+                if age < _SPECIALIZED_HOOK_RECENCY:
+                    _log(f"{hook_name} file is {age:.1f}s old, skipping (specialized hook already spoke)")
+                    return
+            except OSError:
+                pass
 
     # Extract transcript path
     transcript_path = hook_input.get("transcript_path")
