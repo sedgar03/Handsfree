@@ -33,7 +33,7 @@ _repo_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_repo_root / "src"))
 sys.path.insert(0, str(_repo_root / "hooks"))
 
-from config import is_handsfree_enabled
+from config import is_handsfree_enabled, is_wake_enabled
 from shared import log as _log_shared
 
 _SPECIALIZED_HOOK_RECENCY = 60  # seconds — skip if a specialized hook spoke recently
@@ -151,9 +151,12 @@ def _extract_last_assistant_text(transcript_path: str) -> str | None:
 def main():
     _log("TTS hook started")
 
-    # Fast exit if handsfree mode is off
-    if not is_handsfree_enabled():
-        _log("Handsfree not enabled")
+    speech_enabled = is_handsfree_enabled()
+    wake_enabled = is_wake_enabled()
+
+    # Fast exit if neither automatic speech nor wake-queue mode is on.
+    if not speech_enabled and not wake_enabled:
+        _log("Handsfree speech/wake not enabled")
         return
 
     # Read hook JSON from stdin
@@ -212,14 +215,41 @@ def main():
 
     # Summarize and speak (import lazily so disabled mode has zero dep overhead)
     try:
+        from event_queue import enqueue_event
         from summarizer import summarize
-        from tts import speak
+        from queue_actions import speak_event
 
         summary = summarize(text)
         _log(f"Summary: {summary[:100] if summary else '(empty)'}")
         if summary:
-            speak(summary)
-            _log("Spoke summary")
+            event = enqueue_event(
+                source="claude",
+                kind="summary",
+                summary=summary,
+                detail=text[:2000],
+                priority=0,
+                transcript_path=transcript_path,
+                session_id=session_id,
+                payload={"event": event_type},
+            )
+            if speech_enabled:
+                speak_event(event)
+                try:
+                    from event_queue import update_event_status
+
+                    update_event_status(event.id, "done")
+                except Exception:
+                    pass
+                _log("Spoke summary")
+            else:
+                if wake_enabled:
+                    try:
+                        from audio_output import play_notification
+
+                        play_notification("claude")
+                    except Exception as e:
+                        _log(f"Notification sound failed: {e}")
+                _log(f"Queued summary event {event.id}")
     except Exception as e:
         _log(f"Error: {e}")
 

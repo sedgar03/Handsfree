@@ -31,7 +31,7 @@ os.environ["HANDSFREE_ACTIVE"] = "1"
 _repo_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_repo_root / "src"))
 
-from config import is_handsfree_enabled
+from config import is_handsfree_enabled, is_wake_enabled
 
 # Wire up hooks/ imports for shared module
 sys.path.insert(0, str(_repo_root / "hooks"))
@@ -53,9 +53,12 @@ def _log(msg: str):
 def main():
     _log("AskQuestion hook started")
 
-    # Fast exit if handsfree mode is off
-    if not is_handsfree_enabled():
-        _log("Handsfree not enabled")
+    speech_enabled = is_handsfree_enabled()
+    wake_enabled = is_wake_enabled()
+
+    # Fast exit if neither automatic speech nor wake-queue mode is on.
+    if not speech_enabled and not wake_enabled:
+        _log("Handsfree speech/wake not enabled")
         return
 
     # Read hook JSON from stdin
@@ -78,13 +81,6 @@ def main():
 
     _log(f"Found {len(questions)} question(s)")
 
-    # Import TTS lazily (zero dep overhead when disabled)
-    try:
-        from tts import speak
-    except Exception as e:
-        _log(f"Failed to import tts: {e}")
-        return
-
     # Write pending question state file BEFORE speaking.
     # This closes the race window where the user clicks their AirPod stem
     # during TTS playback — the listener can pick up the file immediately.
@@ -105,6 +101,54 @@ def main():
         _log(f"Wrote pending question file with {len(all_options)} options")
     except OSError as e:
         _log(f"Failed to write pending question file: {e}")
+
+    event = None
+    try:
+        from event_queue import enqueue_event
+
+        question_summary = last_q.get("question", "") or "Claude has a question."
+        event = enqueue_event(
+            source="claude",
+            kind="question",
+            summary=question_summary,
+            detail=json.dumps(state, sort_keys=True),
+            priority=100,
+            session_id=session_id,
+            payload={"questions": questions},
+        )
+        _log(f"Queued question event {event.id}")
+    except Exception as e:
+        _log(f"Failed to queue question event: {e}")
+
+    if not speech_enabled:
+        if wake_enabled:
+            try:
+                from audio_output import play_notification
+
+                play_notification("claude")
+            except Exception as e:
+                _log(f"Notification sound failed: {e}")
+        _log("Speech disabled; question queued only")
+        return
+
+    # Import TTS lazily (zero dep overhead when disabled)
+    try:
+        from tts import speak
+    except Exception as e:
+        _log(f"Failed to import tts: {e}")
+        return
+
+    # Give the user the workflow context before the detailed question/options.
+    if event is not None:
+        try:
+            from queue_actions import INTRO_PAUSE_SECONDS, workflow_intro_text
+
+            intro = workflow_intro_text(event.workflow)
+            if intro:
+                speak(intro)
+                time.sleep(INTRO_PAUSE_SECONDS)
+        except Exception as e:
+            _log(f"Failed to speak workflow intro: {e}")
 
     # Speak attention getter
     speak("Attention: there's a question on your computer.")

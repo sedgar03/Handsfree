@@ -11,6 +11,7 @@ Uses mlx-whisper with whisper-large-v3-turbo for fast Apple Silicon transcriptio
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -30,6 +31,21 @@ def _get_whisper():
         import mlx_whisper
         _whisper = mlx_whisper
     return _whisper
+
+
+def warm() -> dict:
+    """Load the Whisper model into the current process."""
+
+    started = time.time()
+    import mlx.core as mx
+    from mlx_whisper.transcribe import ModelHolder
+
+    ModelHolder.get_model(MODEL_ID, mx.float16)
+    return {
+        "ok": True,
+        "model": MODEL_ID,
+        "load_seconds": round(time.time() - started, 3),
+    }
 
 
 def record(duration: float = 5.0, sample_rate: int = SAMPLE_RATE) -> np.ndarray:
@@ -86,6 +102,9 @@ def transcribe(audio: np.ndarray, sample_rate: int = SAMPLE_RATE) -> str:
         audio,
         path_or_hf_repo=MODEL_ID,
         language="en",
+        temperature=0.0,
+        condition_on_previous_text=False,
+        verbose=False,
     )
     return result.get("text", "").strip()
 

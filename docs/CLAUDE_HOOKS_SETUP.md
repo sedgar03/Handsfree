@@ -8,7 +8,7 @@ The installer registers three hooks on three events:
 
 | Event | Hook Script | Purpose |
 |---|---|---|
-| `Stop` | `hooks/handsfree_hook.py` | Summarize assistant output via `claude -p` and speak it |
+| `Stop` | `hooks/handsfree_hook.py` | Summarize assistant output and speak it |
 | `PreToolUse` (matcher: `AskUserQuestion`) | `hooks/ask_question_hook.py` | Speak the question and options so the user can answer by voice |
 | `PermissionRequest` | `hooks/permission_hook.py` | Speak the permission prompt so the user can allow/deny by voice |
 
@@ -76,7 +76,9 @@ If `claude` is not on PATH, set:
 export HANDSFREE_CLAUDE_BIN="/absolute/path/to/claude"
 ```
 
-`src/summarizer.py` will use that path when hook summaries call `claude -p`.
+The default summarizer uses the resident local MLX daemon and falls back to the
+deterministic local summarizer when the daemon is not warm. `src/summarizer.py`
+uses `HANDSFREE_CLAUDE_BIN` only when `summary_backend` is set to `claude`.
 
 ## Manual JSON patch (if needed)
 

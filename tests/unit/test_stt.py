@@ -12,12 +12,13 @@ class FakeWhisper:
         self.text = text
         self.calls = []
 
-    def transcribe(self, audio, path_or_hf_repo, language):
+    def transcribe(self, audio, path_or_hf_repo, language, **kwargs):
         self.calls.append(
             {
                 "audio": audio,
                 "path_or_hf_repo": path_or_hf_repo,
                 "language": language,
+                "kwargs": kwargs,
             }
         )
         return {"text": self.text}
@@ -47,6 +48,7 @@ def test_transcribe_passes_numpy_audio_to_whisper(monkeypatch):
     assert fake_whisper.calls[0]["audio"] is audio
     assert fake_whisper.calls[0]["path_or_hf_repo"] == stt.MODEL_ID
     assert fake_whisper.calls[0]["language"] == "en"
+    assert fake_whisper.calls[0]["kwargs"]["condition_on_previous_text"] is False
 
 
 def test_transcribe_handles_empty_audio(monkeypatch):

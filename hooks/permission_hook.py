@@ -30,11 +30,14 @@ os.environ["HANDSFREE_ACTIVE"] = "1"
 _repo_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_repo_root / "src"))
 
-from config import is_handsfree_enabled
+from config import is_handsfree_enabled, is_wake_enabled
 
 # Wire up hooks/ imports for shared module
 sys.path.insert(0, str(_repo_root / "hooks"))
 from shared import log as _log_shared
+
+_DEDUP_WINDOW = 30
+
 
 def _session_path(base: str, session_id: str) -> Path:
     """Build a session-scoped temp file path."""
@@ -42,8 +45,61 @@ def _session_path(base: str, session_id: str) -> Path:
     return Path(f"/tmp/handsfree-{base}-{tag}.json")
 
 
+def _dedup_lock_path(session_id: str) -> Path:
+    tag = session_id[:8] if session_id else "unknown"
+    return Path(f"/tmp/handsfree-permission-dedup-{tag}.lock")
+
+
 def _log(msg: str):
     _log_shared(msg, tag="perm")
+
+
+def _dedup_check(content_key: str, session_id: str) -> bool:
+    """Return True when the same permission alert was handled recently."""
+    import fcntl
+    import hashlib
+    import tempfile
+
+    seen_file = _session_path("permission-seen", session_id)
+    lock_file = _dedup_lock_path(session_id)
+    content_hash = hashlib.md5(content_key.encode()).hexdigest()[:12]
+    now = time.time()
+
+    lock_fd = None
+    try:
+        lock_fd = os.open(str(lock_file), os.O_CREAT | os.O_RDWR)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+
+        state = {}
+        if seen_file.exists():
+            try:
+                with open(seen_file) as f:
+                    state = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                state = {}
+
+        last_time = float(state.get(content_hash, 0) or 0)
+        if now - last_time < _DEDUP_WINDOW:
+            _log(f"Dedup: skipping duplicate permission (hash={content_hash}, age={now - last_time:.1f}s)")
+            return True
+
+        state = {h: t for h, t in state.items() if now - float(t or 0) < _DEDUP_WINDOW * 2}
+        state[content_hash] = now
+        try:
+            tmp_fd, tmp_path = tempfile.mkstemp(dir="/tmp", suffix=".json")
+            with os.fdopen(tmp_fd, "w") as f:
+                json.dump(state, f)
+            os.rename(tmp_path, str(seen_file))
+        except OSError:
+            pass
+        return False
+    finally:
+        if lock_fd is not None:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                os.close(lock_fd)
+            except OSError:
+                pass
 
 
 def _format_permission_message(tool_name: str, tool_input: dict) -> str:
@@ -70,9 +126,12 @@ def _format_permission_message(tool_name: str, tool_input: dict) -> str:
 def main():
     _log("Permission hook started")
 
-    # Fast exit if handsfree mode is off
-    if not is_handsfree_enabled():
-        _log("Handsfree not enabled")
+    speech_enabled = is_handsfree_enabled()
+    wake_enabled = is_wake_enabled()
+
+    # Fast exit if neither automatic speech nor wake-queue mode is on.
+    if not speech_enabled and not wake_enabled:
+        _log("Handsfree speech/wake not enabled")
         return
 
     # Read hook JSON from stdin
@@ -98,6 +157,8 @@ def main():
     # Format the message
     message = _format_permission_message(tool_name, tool_input)
     _log(f"Message: {message}")
+    if _dedup_check(f"permission:{message}", session_id):
+        return
 
     # Write pending permission state file BEFORE speaking.
     # This closes the race window where the user clicks their AirPod stem
@@ -118,15 +179,47 @@ def main():
     except OSError as e:
         _log(f"Failed to write pending permission file: {e}")
 
-    # Import TTS lazily (zero dep overhead when disabled)
+    event = None
     try:
-        from tts import speak
+        from event_queue import enqueue_event
+
+        event = enqueue_event(
+            source="claude",
+            kind="permission",
+            summary=message,
+            detail=json.dumps(state, sort_keys=True),
+            priority=200,
+            session_id=session_id,
+            payload={"tool_name": tool_name, "tool_input": tool_input},
+        )
+        _log(f"Queued permission event {event.id}")
     except Exception as e:
-        _log(f"Failed to import tts: {e}")
+        _log(f"Failed to queue permission event: {e}")
+
+    if not speech_enabled:
+        if wake_enabled:
+            try:
+                from audio_output import play_notification
+
+                play_notification("claude")
+            except Exception as e:
+                _log(f"Notification sound failed: {e}")
+        _log("Speech disabled; permission queued only")
         return
 
-    # Speak the permission request
-    speak(f"Attention: permission needed. {message}. Say allow or deny.")
+    # Speak the permission request with the captured workflow label when queueing succeeded.
+    try:
+        if event is not None:
+            from queue_actions import speak_event
+
+            speak_event(event)
+        else:
+            from tts import speak
+
+            speak(f"Attention: permission needed. {message}. Say allow or deny.")
+    except Exception as e:
+        _log(f"Failed to speak permission request: {e}")
+        return
 
     _log("Finished speaking permission request")
 

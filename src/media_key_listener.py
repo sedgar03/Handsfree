@@ -57,6 +57,30 @@ def _cleanup_pending_files():
             except OSError:
                 pass
 
+
+def _try_read_queued_event() -> bool:
+    """Use an idle click as a wake action when queued events exist."""
+
+    try:
+        from config import is_wake_enabled, queue_consume_after_timestamp
+        from event_queue import pending_count
+        from queue_actions import read_next_event
+
+        if (
+            not is_wake_enabled()
+            or pending_count(created_after=queue_consume_after_timestamp()) <= 0
+        ):
+            return False
+
+        threading.Thread(
+            target=lambda: read_next_event(speak_empty=False),
+            daemon=True,
+        ).start()
+        return True
+    except Exception as exc:  # noqa: BLE001
+        print(f"[media-key] Queue wake failed: {exc}", file=sys.stderr)
+        return False
+
 # --- Media key constants (from IOKit/hidsystem/ev_keymap.h) ---
 NX_KEYTYPE_PLAY = 16
 NX_KEYTYPE_NEXT = 17
@@ -530,6 +554,9 @@ class MediaKeyListener:
                     )
                     self._last_transcription_at = 0.0
                     threading.Thread(target=self._handle_submit, daemon=True).start()
+                    return True
+                if _try_read_queued_event():
+                    print(f"[media-key] PLAY from {source} -> read queued event", file=sys.stderr)
                     return True
                 print(f"[media-key] PLAY from {source}", file=sys.stderr)
                 threading.Thread(target=self._start_recording, daemon=True).start()

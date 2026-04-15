@@ -7,9 +7,14 @@
 | Module | Purpose |
 |---|---|
 | `config.py` | Read `~/.claude/voice-config.json` with defaults, check handsfree toggle |
-| `tts.py` | Kokoro TTS wrapper — `speak()`, lazy model init, macOS `say` fallback, file lock serialization |
-| `stt.py` | mlx-whisper STT wrapper — record from mic via sounddevice, transcribe audio |
-| `summarizer.py` | Summarize Claude output via `claude -p` with terse/detailed prompts |
+| `tts.py` | Kokoro TTS client/wrapper — uses resident daemon when warm, macOS `say` fallback |
+| `tts_daemon.py` | Resident Kokoro/macOS speech daemon for warm playback |
+| `stt.py` | mlx-whisper STT wrapper — record from mic via sounddevice, warm and transcribe audio |
+| `summarizer.py` | Summarize agent output for speech; resident MLX backend by default with deterministic fallback |
+| `summary_daemon.py` | Resident Qwen/MLX summarizer daemon |
+| `conductor_daemon.py` | Resident local LLM daemon for phase-1 Conductor mode chat; supports MLX and local GGUF via llama.cpp |
+| `conductor_client.py` | Dependency-free socket client for the conductor daemon |
+| `service_control.py` | Start, warm, enable, disable, and inspect Handsfree services |
 | `listener.py` | Unified input listener — routes to media_key or hotkey mode, handles text injection and question/permission answering |
 | `media_key_listener.py` | AirPods stem-click detection via MPRemoteCommandCenter + CGEventTap fallback, VAD auto-stop, recording state machine |
 | `hotkey_listener.py` | Global hotkey detection via PyObjC CGEventTap (F18 hold-to-record) |
@@ -26,6 +31,14 @@
 
 # Test TTS
 uv run --script src/tts.py "Hello from Handsfree"
+
+# Warm and inspect speech services
+PYTHONPATH=src uv run python -m broker warm speech
+PYTHONPATH=src uv run python -m broker status
+
+# Try the phase-1 local conductor
+PYTHONPATH=src uv run python -m broker warm conductor --timeout 300
+PYTHONPATH=src uv run python -m broker conductor chat "Help me think through this task"
 
 # Test STT (record and transcribe)
 uv run --script src/stt.py

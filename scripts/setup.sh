@@ -19,6 +19,20 @@ fi
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MODELS_DIR="$REPO_ROOT/models"
+PYTHON="${PYTHON:-}"
+
+find_python() {
+    if [ -n "$PYTHON" ] && "$PYTHON" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then
+        return 0
+    fi
+    for candidate in python3.14 python3.13 python3.12 python3.11 python3; do
+        if command -v "$candidate" &>/dev/null && "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)' 2>/dev/null; then
+            PYTHON="$(command -v "$candidate")"
+            return 0
+        fi
+    done
+    return 1
+}
 
 echo "=== Handsfree Setup ==="
 echo "Repo: $REPO_ROOT"
@@ -33,15 +47,14 @@ fi
 echo "[✓] uv found: $(uv --version)"
 
 # Check Python 3.11+
-PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "0.0")
-PYTHON_MAJOR=$(echo "$PYTHON_VERSION" | cut -d. -f1)
-PYTHON_MINOR=$(echo "$PYTHON_VERSION" | cut -d. -f2)
-if [ "$PYTHON_MAJOR" -lt 3 ] || { [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -lt 11 ]; }; then
+if ! find_python; then
+    PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "0.0")
     echo "ERROR: Python 3.11+ is required (found: $PYTHON_VERSION)."
     echo "  Install via Homebrew: brew install python@3.12"
     exit 1
 fi
-echo "[✓] Python $PYTHON_VERSION"
+PYTHON_VERSION=$("$PYTHON" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+echo "[✓] Python $PYTHON_VERSION: $PYTHON"
 
 # Check Claude Code CLI
 if ! command -v claude &>/dev/null; then
@@ -80,11 +93,11 @@ fi
 # 3. Pre-download Whisper model (cached by HuggingFace Hub)
 echo ""
 echo "--- Pre-downloading Whisper model ---"
-if uv run --with huggingface-hub python3 -c "from huggingface_hub import snapshot_download; snapshot_download('mlx-community/whisper-large-v3-turbo', local_files_only=True)" &>/dev/null; then
+if uv run --python "$PYTHON" --with huggingface-hub python -c "from huggingface_hub import snapshot_download; snapshot_download('mlx-community/whisper-large-v3-turbo', local_files_only=True)" &>/dev/null; then
     echo "[✓] whisper-large-v3-turbo already cached"
 else
     echo "Downloading whisper-large-v3-turbo (~800MB, cached by HuggingFace Hub)..."
-    uv run --with huggingface-hub python3 -c "from huggingface_hub import snapshot_download; snapshot_download('mlx-community/whisper-large-v3-turbo')" || echo "[!] Whisper model download failed — will download on first use"
+    uv run --python "$PYTHON" --with huggingface-hub python -c "from huggingface_hub import snapshot_download; snapshot_download('mlx-community/whisper-large-v3-turbo')" || echo "[!] Whisper model download failed — will download on first use"
 fi
 
 # 4. Create default config if missing (renumbered after Whisper step)
@@ -99,6 +112,8 @@ else
 {
   "input_mode": "media_key",
   "verbosity": "detailed",
+  "summary_backend": "mlx",
+  "summary_model": "mlx-community/Qwen3.5-2B-OptiQ-4bit",
   "kokoro_voice": "af_heart",
   "voice_presets": {
     "narrator": "af_heart:0.7,af_nicole:0.3"
@@ -108,7 +123,14 @@ else
   "auto_submit": true,
   "auto_submit_after_transcription": true,
   "silence_timeout": 4.5,
-  "max_recording": 300
+  "max_recording": 300,
+  "wake_words": ["handsfree", "hands free", "hey codex", "hey claude"],
+  "wake_speech_threshold": 0.008,
+  "wake_silence_threshold": 0.004,
+  "wake_silence_timeout": 1.2,
+  "wake_max_utterance": 20.0,
+  "wake_min_utterance": 0.4,
+  "wake_allow_queue_without_prefix": true
 }
 EOF
     echo "[✓] Created default config: $CONFIG_PATH"
@@ -145,6 +167,10 @@ echo ""
 echo "Recommended first run:"
 echo "  ./scripts/handsfree.sh --media-key"
 echo "  # (runs permission checks automatically before launch)"
+echo "  # HUD-driven listener only:"
+echo "  # ./scripts/listener.sh --media-key"
+echo "  # HUD-driven wake phrase listener:"
+echo "  # ./scripts/listener.sh --wake-word"
 echo "  # Optional per-terminal voice override:"
 echo "  # export HANDSFREE_VOICE='af_heart:0.7,af_nicole:0.3'"
 echo ""

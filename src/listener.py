@@ -4,6 +4,7 @@
 # dependencies = [
 #   "pyobjc-framework-Quartz",
 #   "pyobjc-framework-Cocoa",
+#   "openwakeword",
 #   "mlx-whisper",
 #   "sounddevice",
 #   "numpy",
@@ -14,6 +15,8 @@
 Reads config from ~/.claude/voice-config.json for input mode:
   - "hotkey" — F18 hold-to-talk (original)
   - "media_key" — AirPods stem click with VAD auto-stop
+  - "wake_word" — OpenWakeWord trigger + Whisper command capture,
+    or legacy Whisper phrase mode
 
 Transcribed text is copied to clipboard and pasted into the active terminal.
 User reviews the pasted text and presses Enter manually (safety measure),
@@ -24,20 +27,24 @@ from __future__ import annotations
 
 import glob
 import json
+import os
 import re
 import signal
 import subprocess
 import sys
 import time
+import atexit
 from pathlib import Path
 
 # Allow imports from src/
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from airpods_check import print_status as check_airpods
-from config import get_config
+from config import LISTENER_PID, get_config
 from hotkey_listener import HotkeyListener
 from media_key_listener import MediaKeyListener
+from openwakeword_listener import OpenWakeWordListener
+from wake_phrase_listener import WakePhraseListener
 
 
 PENDING_QUESTION_MAX_AGE = 300  # 5 minutes
@@ -335,6 +342,33 @@ def inject_text(text: str) -> bool:
         return True
     if _try_answer_question(text):
         return True
+    try:
+        from queue_actions import handle_active_event_text
+
+        if handle_active_event_text(text):
+            return True
+    except Exception as exc:  # noqa: BLE001
+        print(f"[listener] Queue handling failed: {exc}", file=sys.stderr)
+
+    if get_config().get("interaction_mode") == "conductor":
+        try:
+            from queue_actions import handle_conductor_text
+
+            print("[listener] Routing transcription to conductor.", file=sys.stderr)
+            if handle_conductor_text(text):
+                return True
+        except Exception as exc:  # noqa: BLE001
+            print(f"[listener] Conductor handling failed: {exc}", file=sys.stderr)
+            try:
+                from queue_actions import speak_text
+
+                speak_text("Conductor handling failed.")
+            except Exception:
+                pass
+            return True
+        print("[listener] Conductor did not consume transcription.", file=sys.stderr)
+        return True
+
     subprocess.run(["pbcopy"], input=text.encode(), check=True)
     subprocess.run(
         [
@@ -378,12 +412,41 @@ def submit_text():
 
 
 def main():
-    import os
     config = get_config()
     # CLI override via env var (set by handsfree.sh --media-key / --hotkey)
     input_mode = os.environ.get("HANDSFREE_INPUT_MODE") or config.get("input_mode", "media_key")
+    try:
+        from service_control import write_service_status
+
+        LISTENER_PID.parent.mkdir(parents=True, exist_ok=True)
+        LISTENER_PID.write_text(f"{os.getpid()}\n")
+        write_service_status("listener", "starting", input_mode=input_mode)
+
+        def _mark_stopped() -> None:
+            write_service_status("listener", "stopped", input_mode=input_mode)
+
+        atexit.register(_mark_stopped)
+    except Exception:
+        write_service_status = None  # type: ignore[assignment]
 
     print("=== Handsfree Listener ===", file=sys.stderr)
+
+    if os.environ.get("HANDSFREE_WARM_STT") == "1":
+        if write_service_status is not None:
+            write_service_status("stt", "starting", input_mode=input_mode)
+        print("[listener] Warming Whisper STT model...", file=sys.stderr)
+        try:
+            from stt import warm
+
+            stt_status = warm()
+            if write_service_status is not None:
+                write_service_status("stt", "ready", input_mode=input_mode, **stt_status)
+            print("[listener] Whisper STT model ready.", file=sys.stderr)
+        except Exception as exc:  # noqa: BLE001
+            if write_service_status is not None:
+                write_service_status("stt", "error", input_mode=input_mode, error=str(exc))
+            print(f"[listener] Whisper warm-up failed: {exc}", file=sys.stderr)
+            raise
 
     if input_mode == "media_key":
         check_airpods()
@@ -410,6 +473,70 @@ def main():
             speech_threshold=config.get("speech_threshold"),
             silence_threshold=config.get("silence_threshold"),
         )
+    elif input_mode == "wake_word":
+        auto_submit = config.get("auto_submit", True)
+        wake_engine = config.get("wake_engine", "openwakeword")
+        print(f"Input: wake word ({wake_engine})", file=sys.stderr)
+        print("  Enable the HUD wake button, then use the wake command.", file=sys.stderr)
+        print("  Queued messages can be read with the wake command.", file=sys.stderr)
+        print("", file=sys.stderr)
+
+        if wake_engine == "openwakeword":
+            print(f"  OpenWakeWord models: {', '.join(config.get('openwakeword_models', []))}", file=sys.stderr)
+            print("  Say the wake word, then the command.", file=sys.stderr)
+            print("  Example: hey jarvis", file=sys.stderr)
+            print("  Example: hey jarvis ... what's up", file=sys.stderr)
+            listener = OpenWakeWordListener(
+                wake_models=config.get("openwakeword_models", []),
+                on_command=inject_text,
+                on_submit=submit_text if auto_submit else None,
+                auto_submit=auto_submit,
+                threshold=float(config.get("openwakeword_threshold", 0.5)),
+                inference_framework=str(config.get("openwakeword_inference_framework", "onnx")),
+                vad_threshold=float(config.get("openwakeword_vad_threshold", 0.0)),
+                frame_ms=int(config.get("openwakeword_frame_ms", 80)),
+                cooldown=float(config.get("openwakeword_cooldown", 1.5)),
+                post_speech_cooldown=float(config.get("openwakeword_post_speech_cooldown", 4.0)),
+                false_wake_limit=int(config.get("openwakeword_false_wake_limit", 3)),
+                false_wake_window=float(config.get("openwakeword_false_wake_window", 45.0)),
+                false_wake_disarm=bool(config.get("openwakeword_false_wake_disarm", True)),
+                auto_read_queue=bool(config.get("openwakeword_auto_read_queue", True)),
+                allow_freeform_commands=bool(config.get("openwakeword_allow_freeform_commands", False)),
+                command_timeout=float(config.get("openwakeword_command_timeout", 6.0)),
+                speech_threshold=config.get(
+                    "wake_speech_threshold",
+                    config.get("speech_threshold", 0.002),
+                ),
+                silence_threshold=config.get(
+                    "wake_silence_threshold",
+                    config.get("silence_threshold", 0.0015),
+                ),
+                silence_timeout=config.get("wake_silence_timeout", 1.2),
+                min_utterance=config.get("wake_min_utterance", 0.4),
+            )
+        else:
+            print("  Legacy Whisper phrase mode.", file=sys.stderr)
+            print("  Example: handsfree read next", file=sys.stderr)
+            print("  Example: hey codex run the tests", file=sys.stderr)
+            print(f"  Wake phrases: {', '.join(config.get('wake_words', []))}", file=sys.stderr)
+            listener = WakePhraseListener(
+                wake_words=config.get("wake_words", []),
+                on_command=inject_text,
+                on_submit=submit_text if auto_submit else None,
+                auto_submit=auto_submit,
+                speech_threshold=config.get(
+                    "wake_speech_threshold",
+                    config.get("speech_threshold", 0.002),
+                ),
+                silence_threshold=config.get(
+                    "wake_silence_threshold",
+                    config.get("silence_threshold", 0.0015),
+                ),
+                silence_timeout=config.get("wake_silence_timeout", 1.2),
+                max_utterance=config.get("wake_max_utterance", 20.0),
+                min_utterance=config.get("wake_min_utterance", 0.4),
+                allow_queue_without_prefix=config.get("wake_allow_queue_without_prefix", True),
+            )
     else:
         hotkey = config.get("hotkey", "F18")
         print(f"Input: {hotkey} hold-to-talk", file=sys.stderr)
@@ -419,6 +546,18 @@ def main():
 
         listener = HotkeyListener(hotkey=hotkey, on_transcription=inject_text)
 
+    listener_warm = None
+    warm_listener = getattr(listener, "warm", None)
+    if callable(warm_listener):
+        print("[listener] Warming wake model...", file=sys.stderr)
+        listener_warm = warm_listener()
+        print("[listener] Wake model ready.", file=sys.stderr)
+
+    if write_service_status is not None:
+        if isinstance(listener_warm, dict):
+            write_service_status("listener", "ready", input_mode=input_mode, **listener_warm)
+        else:
+            write_service_status("listener", "ready", input_mode=input_mode)
     listener.run()
 
 
