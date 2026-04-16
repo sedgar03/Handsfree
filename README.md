@@ -114,6 +114,12 @@ AirPods mode with auto-send enabled:
 uv run --extra hud handsfree-hud
 ```
 
+`setup.sh` is intentionally minimal: it installs the default Kokoro/Whisper
+voice path, hooks, and config. Heavy optional resources such as Chatterbox
+weights, custom voice references, generated audio outputs, and local GGUF models
+are opt-in. See `docs/LOCAL_RESOURCES.md` before changing setup or rehydrating a
+new machine with optional assets.
+
 When Claude exits, the launcher cleans up automatically.
 
 ## Required macOS Permissions
@@ -133,6 +139,12 @@ See `docs/HANDSFREE_USER_GUIDE.md` for:
 - daily workflow
 - config options
 - troubleshooting and diagnostics
+
+See `docs/LOCAL_RESOURCES.md` for:
+
+- what local model/resource directories are intentionally gitignored
+- the minimal setup policy future agents should preserve
+- opt-in rehydration notes for Chatterbox, local GGUF models, and generated outputs
 
 See `docs/CLAUDE_HOOKS_SETUP.md` for:
 
@@ -329,7 +341,7 @@ PYTHONPATH=src uv run python -m broker enable wake
 
 ```text
 scripts/
-  setup.sh            # one-time setup
+  setup.sh            # one-time minimal setup
   handsfree.sh        # launch handsfree Claude session
   listener.sh         # foreground listener only for HUD-driven workflows
 hooks/

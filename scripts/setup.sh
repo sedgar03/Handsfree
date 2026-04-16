@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Handsfree — one-command setup
-# Downloads Kokoro models, installs Claude Code hooks, creates default config.
+# Handsfree — one-command minimal setup
+# Downloads only baseline Kokoro/Whisper resources, installs Claude Code hooks,
+# and creates default config. Heavy optional models must stay opt-in; see
+# docs/LOCAL_RESOURCES.md.
 set -euo pipefail
 
 # Platform guard — macOS only
@@ -36,6 +38,7 @@ find_python() {
 
 echo "=== Handsfree Setup ==="
 echo "Repo: $REPO_ROOT"
+echo "Mode: minimal baseline resources only"
 echo ""
 
 # 1. Pre-flight checks
@@ -184,3 +187,8 @@ echo "  3) Input Monitoring: allow your terminal app (recommended)"
 echo "  4) Automation: allow terminal -> System Events (on first submit)"
 echo ""
 echo "Config: $CONFIG_PATH"
+echo ""
+echo "Optional local resources:"
+echo "  Heavy/experimental assets such as Chatterbox weights, local GGUF models,"
+echo "  custom voice references, and generated demo outputs are not downloaded by"
+echo "  setup.sh. See docs/LOCAL_RESOURCES.md for opt-in rehydration guidance."

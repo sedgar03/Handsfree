@@ -22,6 +22,12 @@ Use Claude Code without staring at the screen:
 
 This downloads models, installs hooks, and writes a default config.
 
+Setup intentionally downloads only the minimal baseline resources for the
+default Kokoro/Whisper path. Heavy optional resources such as Chatterbox weights,
+custom voice references, generated demo outputs, and local GGUF models are
+opt-in. See `docs/LOCAL_RESOURCES.md` before rehydrating optional assets or
+changing setup behavior.
+
 Hook details and manual install format are documented in:
 
 - `docs/CLAUDE_HOOKS_SETUP.md`
