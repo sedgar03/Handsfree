@@ -43,4 +43,21 @@ def test_bare_queue_command_accepts_read_next_only():
 
 def test_hallucination_filter_rejects_repeated_noise_text():
     assert looks_like_hallucination("below " * 40, duration=2.0) is True
+    repeated_video = "I'm going to go to the next video. " * 8
+    assert looks_like_hallucination(repeated_video, duration=6.5) is True
+    assert looks_like_hallucination("I'm going to go ahead and get it.", duration=3.8) is True
+    assert (
+        looks_like_hallucination(
+            "I'm going to go ahead and put it in the middle of the oven.",
+            duration=3.8,
+        )
+        is True
+    )
+    assert (
+        looks_like_hallucination(
+            "I'm going to put it in the middle of the bag.",
+            duration=6.5,
+        )
+        is True
+    )
     assert looks_like_hallucination("hey codex run the tests", duration=2.0) is False

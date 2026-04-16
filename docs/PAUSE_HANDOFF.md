@@ -1,154 +1,343 @@
 # Pause Handoff
 
-Created: 2026-04-13
+Updated: 2026-04-15
 
-This note captures the current state of the Handsfree/HUD work so it can be
-paused safely and resumed later without replaying the chat history.
+This note captures the current Handsfree/HUD/conductor state and the next steps
+from the current local conductor toward a Hermes-style tool harness.
 
 ## Current State
 
-- No Handsfree listener is currently running.
-- Wake mode is disarmed: `~/.handsfree/wake-enabled` is absent.
-- Speech mode is off: `~/.handsfree/speech-enabled` is absent.
-- Claude and Codex notification sounds are muted:
-  - `~/.claude/mute`
-  - `~/.codex/mute`
-- The durable queue exists at `~/.handsfree/events.sqlite`.
-- The queue currently contains pending Claude events from several tmux panes.
+- Speech is off: `~/.handsfree/speech-enabled` is absent.
+- Wake is off: `~/.handsfree/wake-enabled` is absent.
+- The listener is stopped.
+- The summary LLM daemon is stopped.
+- The TTS daemon is stopped.
+- The conductor daemon is stopped.
+- Current TTS provider in config is Kokoro.
+- Current local LLM config is Qwen 2B through MLX.
+- OpenWakeWord is configured with `hey jarvis` and `hey rhasspy`.
 
-To inspect the queue:
+Verify:
 
 ```bash
 cd /Users/stevenedgar/Code/handsfree
-PYTHONPATH=src uv run python -m broker list --limit 20
+PYTHONPATH=src uv run python -m broker status
 ```
 
-## What Was Added
+Expected when fully paused: `speech_enabled: false`, `wake_enabled: false`, and
+`summary`, `tts`, `conductor`, and `listener` all stopped.
 
-Handsfree now has a shared HUD/agent control path:
+## What Changed In This Session
 
-- `~/.handsfree/speech-enabled` controls automatic TTS.
-- `~/.handsfree/wake-enabled` arms wake/click retrieval.
-- `~/.handsfree/consume-after` marks the earliest queue event that wake/click
-  retrieval should consume after re-arming or unmuting.
-- `~/.handsfree/events.sqlite` stores queued Claude/Codex events.
-- `src/tmux_target.py` captures workflow labels and target tmux panes.
-- `src/queue_actions.py` can read the next event and route a spoken response
-  back to the original pane.
-- `hooks/codex_notify.py` bridges Codex `notify` into the queue.
-- `scripts/listener.sh` starts a listener without launching Claude Code.
-- `src/wake_phrase_listener.py` adds a first-pass local wake phrase mode.
+- Added read-only conductor tools in `src/conductor_tools.py`:
+  - `list_panes`
+  - `read_pane`
+- Added a simple JSON tool loop to `src/conductor_daemon.py`.
+- Split the conductor internals toward a Hermes-style harness:
+  - `src/conductor_harness.py` now owns conversation history, transcript writes,
+    JSON tool-call parsing, tool execution rounds, and history bounding.
+  - `src/conductor_models.py` now owns MLX and llama.cpp model state, loading,
+    chat completion, and llama.cpp server plumbing.
+  - `src/conductor_daemon.py` now primarily owns socket/service orchestration
+    and delegates chat behavior through the harness/model adapter.
+- Updated `prompts/conductor_system.md` to describe the read-only tool ABI.
+- Added conductor transcript events for tool calls.
+- Added deterministic tmux-pane query handling for common ASR mistakes such as
+  `t mux`, `pains`, and `paints`.
+- Made deterministic tmux shortcuts write to the conductor transcript as:
+  - `user`
+  - `tool: list_panes`
+  - `assistant`
+- Smoothed spoken pane-list responses:
+  - Plain phrases such as `what are my panes` now use the deterministic pane
+    answer path instead of falling through to the LLM.
+  - Large pane lists summarize active windows first and skip the rest unless the
+    user asks for the full pane list.
+  - The `list_panes` tool result now includes `spoken_summary`, and the harness
+    tells the model to prefer that wording for spoken replies.
+- Added the first controlled pane actions:
+  - `send_text_to_pane` drafts one single-line text into a specific pane with
+    `submit=false`.
+  - `focus_pane` selects a specific tmux pane.
+  - `submit_pane` exists as a guarded boundary but returns confirmation-needed;
+    pressing Enter / running commands is intentionally not enabled yet.
+  - Write tools validate against the original user utterance, not just model
+    arguments, so a model-invented tool call without explicit user intent is
+    rejected.
+- Tuned wake command capture to avoid cutting the user off too early:
+  - Added `wake_silence_timeout: 2.0` to `~/.claude/voice-config.json`.
+  - Added `openwakeword_command_timeout: 10.0` to
+    `~/.claude/voice-config.json`.
+  - This trades a slightly slower end-of-command response for more tolerance of
+    natural pauses while speaking to the conductor.
+- Updated the expanded HUD mode panel:
+  - The speaking-person icon in the mode settings panel is now clickable.
+  - Clicking it copies this command to the clipboard:
+    `cd /Users/stevenedgar/Code/handsfree && PYTHONPATH=src uv run python -m broker conductor pane --conversation-id voice`
+  - Paste that into a tmux pane to open the conductor watcher window.
+- Added filters for observed ambient/Whisper hallucinations:
+  - `so`
+  - `thank you`
+  - `cough`
+  - `I'm going to go...`
+  - `I'm going to put it in the middle of the bag`
+  - repeated `next video` phrases
+- Fixed the HUD/off-state bug:
+  - Turning both speech and wake off now also stops summary LLM, TTS, listener,
+    and conductor daemons.
+  - The HUD off path now forces cleanup even if the toggle files are already
+    absent but warm daemons are still running.
 
-Related documentation:
+## Important UI Note
 
-- `docs/HUD_QUEUE_WORKFLOW.md`
-- `docs/HANDSFREE_USER_GUIDE.md`
-- `docs/CLAUDE_HOOKS_SETUP.md`
-
-## HUD State
-
-The button UI lives in the separate repo:
+If the HUD was already running while these code changes were made, restart it so
+the forced off-state cleanup code is loaded:
 
 ```bash
-cd /Users/stevenedgar/Code/model-usage-hud
-usage-hud-app
+cd /Users/stevenedgar/Code/handsfree
+uv run --extra hud handsfree-hud
 ```
 
-The HUD has provider buttons for Claude, Codex, and Gemini, then a spacer, then
-notification, speech, and wake controls. The HUD writes the shared Handsfree
-toggle files under `~/.handsfree`.
+## Current Known Issues
 
-## Known Issues
+- Wake detection is still too eager in noisy environments. OpenWakeWord can
+  trigger with high confidence on background audio.
+- After a wake trigger, Whisper can still hallucinate fluent non-commands from
+  ambient audio.
+- The conductor tool loop is now isolated in `src/conductor_harness.py`, but
+  Qwen 2B is not reliably precise about tool result formatting. It may summarize
+  instead of following a requested shape.
+- The HUD status row currently reports service readiness. That is useful, but
+  the user expectation is that Off should also mean the warm services are not
+  running. The backend fix now enforces that once the HUD is restarted.
 
-AirPods stem-click mode is unreliable in the current environment:
+## Quick Resume
 
-- The first click starts recording.
-- A follow-up click may not reach the listener while the mic stream is open.
-- This can produce long ambient recordings and Whisper hallucinations.
+Start the HUD:
 
-Wake phrase mode is a better direction, but still needs more tuning:
+```bash
+cd /Users/stevenedgar/Code/handsfree
+uv run --extra hud handsfree-hud
+```
 
-- It uses VAD + local Whisper, not a dedicated wake-word model.
-- Short commands like `read next` can be misheard as `Thank you`.
-- The current implementation filters obvious repetition hallucinations and
-  allows `read next` as a special bare queue command.
-- A future pass should either tune input-device handling or evaluate a small
-  wake-word engine such as openWakeWord or Porcupine.
+Start wake:
 
-macOS permissions:
+```bash
+PYTHONPATH=src uv run python -m broker enable wake --timeout 300
+```
 
-- Microphone passed.
-- Input Monitoring passed after the later checks.
-- Automation passed.
-- Accessibility still reported a warning from the checker.
+Open the conductor watch:
 
-## Resume Checklist
+```bash
+PYTHONPATH=src uv run python -m broker conductor watch --conversation-id voice --lines 30
+```
 
-1. Start the HUD:
+Watch listener logs:
 
-   ```bash
-   cd /Users/stevenedgar/Code/model-usage-hud
-   usage-hud-app
-   ```
+```bash
+tail -f ~/.handsfree/logs/listener.log
+```
 
-2. For wake phrase testing, turn on the HUD Wake button.
+Test by voice:
 
-3. If resuming manually without the HUD, mark the current unmute point:
+```text
+Hey Jarvis.
+Use your tools to list my tmux panes.
+```
 
-   ```bash
-   cd /Users/stevenedgar/Code/handsfree
-   PYTHONPATH=src uv run python -m broker enable wake
-   ```
+Expected:
 
-4. Check service readiness:
+- Listener log shows `Wake detected`.
+- Listener log shows the command transcript.
+- Conductor watch shows `tool: list_panes`.
 
-   ```bash
-   cd /Users/stevenedgar/Code/handsfree
-   PYTHONPATH=src uv run python -m broker status
-   ```
+## Roadmap To Hermes
 
-5. Try phrases near the active input mic:
+### 1. Stabilize The Current UX
 
-   ```text
-   handsfree read the next message
-   hey codex run the tests
-   read next
-   ```
+- Restart the HUD and confirm the Off button makes Voice, LLM, TTS, and Mic
+  indicators go muted after the backend stops.
+- Add a clearer HUD distinction between:
+  - enabled/armed
+  - warming
+  - ready but idle
+  - actively speaking/listening
+  - stopped
+  - error
+- Add a small visible event when the listener ignores a hallucination, so it is
+  clear that the system heard noise and intentionally dropped it.
 
-6. Stop the listener before leaving a noisy environment:
+### 2. Make Wake Reliable
 
-   ```bash
-   pkill -f '/Users/stevenedgar/Code/handsfree/src/listener.py'
-   rm -f ~/.handsfree/wake-enabled
-   ```
+- Raise or expose `openwakeword_threshold` in the HUD for noisy rooms.
+- Consider using only one wake model during testing, likely `hey jarvis`, to
+  reduce false positives.
+- Add live listener debug telemetry:
+  - wake model name
+  - wake score
+  - command duration
+  - ignored reason
+- Keep expanding no-op and hallucination filters only for patterns observed in
+  logs.
+- If false wakes remain common, add a second-stage confirmation gate before
+  freeform conductor routing.
+
+### 3. Harden The Local Tool Harness
+
+- Keep phase 1 read-only:
+  - `list_panes`
+  - `read_pane`
+- Store every tool attempt and result in the conductor transcript.
+- Add stricter output shaping after tool calls:
+  - no markdown for spoken replies
+  - short responses by default
+  - deterministic formatting for pane lists
+- Make the tool ABI model-agnostic:
+  - current JSON object format
+  - future Hermes/native tool-call format
+  - future llama.cpp OpenAI-compatible tool calls if supported cleanly
+
+### 4. Introduce A Hermes-Style Harness
+
+The first harness boundary now exists. The next clean step is to keep tightening
+the split without changing the socket protocol:
+
+- Harness currently owns:
+  - conversation state
+  - current JSON tool-call parsing and validation
+  - transcript/memory writes
+  - tool execution rounds
+  - history bounding
+- Model adapter now owns:
+  - model loading
+  - MLX chat
+  - llama.cpp chat
+  - llama.cpp server plumbing
+- Tools own:
+  - read-only tmux inspection
+  - later controlled tmux writes
+  - later agent/event queue actions
+
+Target modules:
+
+- `src/conductor_harness.py` exists.
+- `src/conductor_models.py` exists.
+- `src/conductor_tools.py`
+- `src/conductor_memory.py` is still future work; transcript persistence remains
+  in `src/conductor_transcript.py`.
+
+Next harness-specific work:
+
+- Move tool registry metadata out of prompt prose and into structured tool
+  definitions.
+- Add model-adapter parsing hooks for future Hermes/native tool-call formats.
+- Add explicit retry behavior for malformed tool-call JSON.
+- Add a small `conductor_memory.py` facade before adding summaries or durable
+  preferences.
+
+### 5. Pane Control
+
+Current controlled tools:
+
+- `send_text_to_pane(pane_id, text, submit=false)` drafts one single-line text
+  into a pane without pressing Enter.
+- `focus_pane(pane_id)` focuses/selects a pane.
+- `submit_pane(pane_id)` is present but disabled until a confirmation layer is
+  added.
+
+Next tools / behavior:
+
+- Add a real confirmation state for `submit_pane`.
+- Add deterministic voice shortcuts for common phrasing such as `type git status
+  into pane %3` if the LLM path is too inconsistent.
+- Teach the conductor to resolve human pane names to pane IDs safely.
+
+Guardrails:
+
+- Write tools require explicit user intent.
+- Destructive commands need confirmation.
+- Voice commands should prefer drafting text into a pane before submitting.
+- Drafting rejects newline characters so pasted text cannot implicitly submit.
+
+### 6. Add Persistent Memory
+
+Current persistent memory is transcript-based:
+
+- `~/.handsfree/conductor/transcripts/*.jsonl`
+
+Next:
+
+- Session summaries.
+- Per-tmux-window notes.
+- Recent tool outcomes.
+- User preferences such as preferred wake word, verbosity, and whether direct
+  tmux shortcuts should bypass the LLM.
+
+### 7. Hermes Model Experiment
+
+With the harness boundary in place:
+
+- Add a Hermes model adapter behind the same tool ABI.
+- Start with read-only tools only.
+- Compare against Qwen 2B on:
+  - tool-call reliability
+  - refusal to invent actions
+  - spoken brevity
+  - recovery after bad ASR input
+- Only then enable write tools.
+
+### 8. Local Speech-To-Speech Evaluation
+
+Do not make OpenAI or Gemini Realtime the default path for this project; the
+target is local execution on the Mac Studio to avoid cloud API cost and keep the
+voice loop private.
+
+Evaluation goal:
+
+- Find out whether a local realtime speech-to-speech model can replace or
+  augment the current `OpenWakeWord -> STT -> conductor -> TTS` voice frontend
+  while keeping the existing conductor harness as the authority for tools,
+  transcripts, and safety policy.
+
+Candidate direction:
+
+- Start with local/open models that support realtime or full-duplex spoken
+  dialogue on Apple Silicon, especially Moshi / Kyutai MLX or related local
+  speech models.
+- Treat cloud realtime APIs only as design references, not implementation
+  targets.
+
+Comparison tasks:
+
+- Long command with natural pauses.
+- Barge-in / interruption.
+- `what are my panes`
+- `type git status into pane %3`
+- `focus pane %3`
+- False wake / background noise.
+- Latency from end of speech to audible response.
+
+Architecture constraint:
+
+- The realtime speech model may own turn-taking and natural audio interaction,
+  but it should not directly own tmux or shell actions.
+- Tool calls still route through `src/conductor_harness.py` and
+  `src/conductor_tools.py` so the same guardrails apply.
 
 ## Verification Last Run
 
-The last verification pass after wake phrase changes was:
-
 ```bash
 cd /Users/stevenedgar/Code/handsfree
-bash -n scripts/handsfree.sh scripts/listener.sh scripts/setup.sh
-/opt/homebrew/bin/python3.11 -m py_compile src/config.py src/stt.py src/listener.py src/wake_phrase_listener.py
-uv run pytest
+PYTHONPATH=src uv run pytest tests/unit -q
 ```
 
-Result: `40 passed`.
+Result: 223 passed in 0.31s.
 
-HUD checks were also run earlier:
+## Stop Point
 
-```bash
-cd /Users/stevenedgar/Code/model-usage-hud
-QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest tests.test_state
-```
-
-Result: `6 passed`.
-
-## Design Decisions To Revisit
-
-- Keep Handsfree and model-usage-hud as two cooperating repos for now.
-- Use shared files and SQLite as the contract rather than migrating the HUD
-  into Handsfree immediately.
-- Prefer wake phrase / HUD-driven controls over AirPods stem clicks.
-- Keep Codex on the stable `notify` integration for now; richer Codex hooks can
-  later reuse the same queue contract.
+Work paused after adding the first guarded pane-control tools, increasing wake
+command capture timing, making the HUD mode-panel icon copy the conductor
+watcher command, and adding the local speech-to-speech evaluation track. On next
+resume, verify whether the 2.0 second silence window feels right in real use
+before changing thresholds.
+Restart the HUD after code changes so the clickable mode-panel icon is loaded.

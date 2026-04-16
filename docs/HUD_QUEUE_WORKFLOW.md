@@ -1,7 +1,8 @@
 # HUD, Queue, and Agent Routing
 
 Handsfree now exposes a small shared control plane that can be driven by the
-model usage HUD, Claude hooks, Codex notify hooks, and local broker commands.
+model usage HUD, Claude hooks, Codex/Gemini notify hooks, and local broker
+commands.
 
 ## Shared Toggles
 
@@ -23,6 +24,7 @@ Notification mute still follows provider-specific files:
 |---|---|
 | `~/.claude/mute` | Mute Claude notification sounds |
 | `~/.codex/mute` | Mute Codex notification sounds |
+| `~/.gemini/mute` | Mute Gemini notification sounds |
 
 Notification audio and TTS share `/tmp/handsfree-audio.lock` so a ding and a
 spoken message do not play over each other.
@@ -42,7 +44,7 @@ Events are stored in SQLite at:
 
 Each row records:
 
-- source agent, such as `claude` or `codex`
+- source agent, such as `claude`, `codex`, or `gemini`
 - event kind, such as `notification`, `question`, or `permission`
 - workflow label
 - summary/detail text
@@ -63,16 +65,16 @@ PYTHONPATH=src uv run python -m broker enqueue --source test --kind notification
 PYTHONPATH=src uv run python -m broker mark-unmuted
 ```
 
-`enable speech` starts the resident MLX summarizer and TTS daemon before it
+`enable speech` starts the resident local summarizer and TTS daemon before it
 writes `~/.handsfree/speech-enabled`. `enable wake` starts the listener in wake
 phrase mode and warms Whisper STT before it writes `~/.handsfree/wake-enabled`.
 
 ## Runtime Behavior
 
-Run the HUD button UI from the model usage HUD repo:
+Run the integrated HUD button UI from this repo:
 
 ```bash
-usage-hud-app
+uv run --extra hud handsfree-hud
 ```
 
 Run the voice listener without launching Claude Code when you want manual
@@ -148,3 +150,15 @@ The current notify payload is intentionally treated as a coarse notification.
 It is reliable today, but it does not yet expose the same rich turn transcript
 that Claude Stop hooks provide. A later Codex hook integration can use the same
 queue and tmux routing contract.
+
+## Gemini Integration
+
+Gemini is wired through `~/.gemini/settings.json`:
+
+```bash
+uv run --script hooks/install_gemini.py
+```
+
+The installer registers the same queue hook for Gemini `AfterAgent` and
+`Notification` events. Those events use the same HUD notification, speech, and
+wake buttons as Claude and Codex.

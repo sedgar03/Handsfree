@@ -23,6 +23,7 @@ def test_single_click_from_idle_starts_recording(monkeypatch):
         starts["count"] += 1
 
     monkeypatch.setattr(media_key_module.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(media_key_module, "_try_read_queued_event", lambda: False)
     monkeypatch.setattr(listener, "_start_recording", fake_start_recording)
 
     listener._on_remote_command("toggle")

@@ -39,12 +39,24 @@ DEFAULTS = {
     "input_mode": "media_key",
     "verbosity": "detailed",
     "summary_backend": "mlx",
+    "summary_model_backend": "auto",
     "summary_model": "mlx-community/Qwen3.5-2B-OptiQ-4bit",
+    "summary_llama_server_bin": "llama-server",
+    "summary_llama_host": "127.0.0.1",
+    "summary_llama_port": 8091,
+    "summary_llama_ctx_size": 8192,
+    "summary_llama_gpu_layers": "auto",
+    "summary_llama_start_timeout": 300.0,
+    "summary_llama_chat_timeout": 120.0,
+    "summary_llama_extra_args": [],
     "conductor_backend": "auto",
     "conductor_model": "mlx-community/Qwen3.5-2B-OptiQ-4bit",
-    "conductor_temperature": 0.3,
+    "conductor_temperature": 0.1,
     "conductor_max_tokens": 180,
     "conductor_history_turns": 8,
+    "conductor_tool_max_rounds": 1,
+    "conductor_transcript_enabled": True,
+    "conductor_auto_speak_events": False,
     "conductor_llama_server_bin": "llama-server",
     "conductor_llama_host": "127.0.0.1",
     "conductor_llama_port": 8091,
@@ -84,9 +96,10 @@ DEFAULTS = {
     "openwakeword_post_speech_cooldown": 4.0,
     "openwakeword_false_wake_limit": 3,
     "openwakeword_false_wake_window": 45.0,
-    "openwakeword_false_wake_disarm": True,
+    "openwakeword_false_wake_disarm": False,
     "openwakeword_auto_read_queue": True,
     "openwakeword_allow_freeform_commands": False,
+    "conductor_auto_read_queue": False,
     "openwakeword_command_timeout": 6.0,
     "wake_speech_threshold": 0.008,
     "wake_silence_threshold": 0.004,
@@ -97,8 +110,9 @@ DEFAULTS = {
 }
 
 VALID_INPUT_MODES = {"hotkey", "media_key", "wake_word"}
-VALID_VERBOSITIES = {"direct", "detailed", "terse", "tiny"}
+VALID_VERBOSITIES = {"direct", "expanded", "detailed", "terse", "tiny"}
 VALID_SUMMARY_BACKENDS = {"local", "mlx", "claude"}
+VALID_MODEL_BACKENDS = {"auto", "mlx", "llama.cpp", "llamacpp", "llama_cpp", "gguf"}
 VALID_CONDUCTOR_BACKENDS = {
     "auto",
     "mlx",
@@ -152,6 +166,8 @@ def get_config() -> dict:
         config["verbosity"] = DEFAULTS["verbosity"]
     if config.get("summary_backend") not in VALID_SUMMARY_BACKENDS:
         config["summary_backend"] = DEFAULTS["summary_backend"]
+    if config.get("summary_model_backend") not in VALID_MODEL_BACKENDS:
+        config["summary_model_backend"] = DEFAULTS["summary_model_backend"]
     if config.get("conductor_backend") not in VALID_CONDUCTOR_BACKENDS:
         config["conductor_backend"] = DEFAULTS["conductor_backend"]
     if config.get("wake_engine") not in VALID_WAKE_ENGINES:
@@ -170,6 +186,12 @@ def get_config() -> dict:
     env_summary_backend = os.environ.get("HANDSFREE_SUMMARY_BACKEND")
     if env_summary_backend in VALID_SUMMARY_BACKENDS:
         config["summary_backend"] = env_summary_backend
+    env_summary_model_backend = os.environ.get("HANDSFREE_SUMMARY_MODEL_BACKEND")
+    if env_summary_model_backend in VALID_MODEL_BACKENDS:
+        config["summary_model_backend"] = env_summary_model_backend
+    env_summary_model = os.environ.get("HANDSFREE_SUMMARY_MODEL")
+    if env_summary_model:
+        config["summary_model"] = env_summary_model
     env_conductor_backend = os.environ.get("HANDSFREE_CONDUCTOR_BACKEND")
     if env_conductor_backend in VALID_CONDUCTOR_BACKENDS:
         config["conductor_backend"] = env_conductor_backend
@@ -194,6 +216,22 @@ def is_wake_enabled() -> bool:
     """Check if wake listening is enabled."""
 
     return WAKE_TOGGLE.exists()
+
+
+def should_auto_speak_events() -> bool:
+    """Return whether hook-enqueued agent events should speak immediately.
+
+    In conductor mode, freeform voice is the primary interaction. Queue events
+    stay retrievable on demand unless explicitly opted back into proactive
+    speech with ``conductor_auto_speak_events``.
+    """
+
+    if not is_handsfree_enabled():
+        return False
+    config = get_config()
+    if config.get("interaction_mode") == "conductor":
+        return bool(config.get("conductor_auto_speak_events"))
+    return True
 
 
 def mark_consume_after(timestamp: float | None = None) -> float:

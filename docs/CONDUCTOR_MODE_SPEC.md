@@ -166,9 +166,10 @@ via `conductor_model` in `~/.claude/voice-config.json`.
 
 `conductor_backend: "auto"` keeps the MLX path for MLX/Hugging Face model IDs
 and selects the llama.cpp path for local `.gguf` files or directories containing
-one `.gguf`. The llama.cpp backend starts Homebrew `llama-server` as a child of
-the conductor daemon, then sends chat turns through the OpenAI-compatible
-`/v1/chat/completions` endpoint.
+one `.gguf`. The summary daemon has the same `summary_model_backend: "auto"`
+behavior, so the HUD can point both readout summaries and conductor chat at the
+same local model. The llama.cpp backend starts Homebrew `llama-server`, then
+sends chat turns through the OpenAI-compatible `/v1/chat/completions` endpoint.
 
 Commands:
 

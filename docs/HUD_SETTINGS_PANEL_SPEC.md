@@ -8,8 +8,9 @@
 
 Add a collapsible settings panel to the bottom of the HUD window, toggled by
 right-click (two-finger click on trackpad). The panel slides into view below
-the existing metric grid. First control: a voice picker dropdown for selecting
-the Kokoro TTS voice.
+the existing metric grid. Current controls include TTS voice settings,
+interaction mode, readout verbosity, and a shared local LLM picker for summary
+readouts and conductor mode.
 
 ## Behavior
 
@@ -208,6 +209,5 @@ settings panel:
 
 - Speed slider (`kokoro_speed`)
 - Voice preset editor (blend specs)
-- Summary backend picker
 - Silence timeout slider
 - Wake word configuration

@@ -260,14 +260,76 @@ def test_handle_conductor_text_speaks_conductor_response(monkeypatch):
     assert starts == [{"wait": True, "timeout": 120.0}]
     assert len(requests) == 1
     assert "Current tmux panes:" in requests[0][0]
+    assert "read-only tmux tools" in requests[0][0]
     assert "0:1.1 %1 cwd=/tmp command=zsh title=shell" in requests[0][0]
     assert "User said: help me plan the next step" in requests[0][0]
     assert requests[0][1]["conversation_id"] == "voice"
     assert spoken == ["You have two panes open."]
 
 
+def test_handle_conductor_text_ignores_low_information_fragments(monkeypatch):
+    starts = []
+    spoken = []
+    fake_service_control = types.SimpleNamespace(
+        start_conductor_daemon=lambda **kwargs: starts.append(kwargs) or {"ok": True}
+    )
+    monkeypatch.setitem(sys.modules, "service_control", fake_service_control)
+    monkeypatch.setattr(queue_actions, "_speak", lambda text: spoken.append(text) or True)
+
+    assert queue_actions.handle_conductor_text("so") is False
+
+    assert starts == []
+    assert spoken == []
+
+
+def test_handle_conductor_text_ignores_goodbye_hallucination(monkeypatch):
+    starts = []
+    spoken = []
+    fake_service_control = types.SimpleNamespace(
+        start_conductor_daemon=lambda **kwargs: starts.append(kwargs) or {"ok": True}
+    )
+    monkeypatch.setitem(sys.modules, "service_control", fake_service_control)
+    monkeypatch.setattr(queue_actions, "_speak", lambda text: spoken.append(text) or True)
+
+    assert queue_actions.handle_conductor_text("I'm going to go.") is False
+
+    assert starts == []
+    assert spoken == []
+
+
+def test_handle_conductor_text_ignores_vocalization_noop(monkeypatch):
+    starts = []
+    spoken = []
+    fake_service_control = types.SimpleNamespace(
+        start_conductor_daemon=lambda **kwargs: starts.append(kwargs) or {"ok": True}
+    )
+    monkeypatch.setitem(sys.modules, "service_control", fake_service_control)
+    monkeypatch.setattr(queue_actions, "_speak", lambda text: spoken.append(text) or True)
+
+    assert queue_actions.handle_conductor_text("Cough.") is False
+
+    assert starts == []
+    assert spoken == []
+
+
+def test_handle_conductor_text_ignores_middle_of_bag_hallucination(monkeypatch):
+    starts = []
+    spoken = []
+    fake_service_control = types.SimpleNamespace(
+        start_conductor_daemon=lambda **kwargs: starts.append(kwargs) or {"ok": True}
+    )
+    monkeypatch.setitem(sys.modules, "service_control", fake_service_control)
+    monkeypatch.setattr(queue_actions, "_speak", lambda text: spoken.append(text) or True)
+
+    assert queue_actions.handle_conductor_text("I'm going to put it in the middle of the bag.") is False
+
+    assert starts == []
+    assert spoken == []
+
+
 def test_handle_conductor_text_answers_tmux_panes_directly(monkeypatch):
     spoken = []
+    transcript = []
     fake_service_control = types.SimpleNamespace(
         start_conductor_daemon=lambda **_kwargs: (_ for _ in ()).throw(
             AssertionError("exact tmux inventory should not call conductor")
@@ -285,13 +347,24 @@ def test_handle_conductor_text_answers_tmux_panes_directly(monkeypatch):
         ),
     )
     monkeypatch.setattr(queue_actions, "_speak", lambda text: spoken.append(text) or True)
+    monkeypatch.setattr(
+        queue_actions,
+        "append_transcript_event",
+        lambda conversation_id, event_type, **kwargs: transcript.append(
+            (conversation_id, event_type, kwargs)
+        ),
+    )
 
     assert queue_actions.handle_conductor_text("what tmux panes do I have open") is True
 
     assert len(spoken) == 1
-    assert spoken[0].startswith("I see 2 tmux panes:")
-    assert "Hands-free: handsfree running node" in spoken[0]
-    assert "Pain: synapse running shell, work" in spoken[0]
+    assert spoken[0].startswith("I see 2 tmux panes.")
+    assert "Hands-free is handsfree running node" in spoken[0]
+    assert "Pain is synapse running shell, titled work" in spoken[0]
+    assert ";" not in spoken[0]
+    assert [entry[1] for entry in transcript] == ["user", "tool", "assistant"]
+    assert transcript[1][2]["text"] == "list_panes"
+    assert transcript[1][2]["data"]["route"] == "direct_tmux_panes"
 
 
 def test_tmux_pane_query_accepts_pains_mishearing(monkeypatch):
@@ -304,4 +377,94 @@ def test_tmux_pane_query_accepts_pains_mishearing(monkeypatch):
     answer = queue_actions._tmux_panes_answer_if_requested("what are my tmux pains")
 
     assert answer is not None
-    assert answer.startswith("I see 1 tmux pane:")
+    assert answer.startswith("I see 1 tmux pane.")
+
+
+def test_tmux_pane_query_accepts_t_mux_paints_mishearing(monkeypatch):
+    monkeypatch.setattr(
+        queue_actions,
+        "_tmux_panes_snapshot",
+        lambda: "0:1.1\t%1\tHands-free\t/Users/me/Code/handsfree\tnode\thandsfree\t1",
+    )
+
+    answer = queue_actions._tmux_panes_answer_if_requested("what t mux paints do i have open")
+
+    assert answer is not None
+    assert answer.startswith("I see 1 tmux pane.")
+
+
+def test_plain_pane_query_uses_direct_readable_answer(monkeypatch):
+    monkeypatch.setattr(
+        queue_actions,
+        "_tmux_panes_snapshot",
+        lambda: "0:1.1\t%1\tHands-free\t/Users/me/Code/handsfree\tnode\thandsfree\t1",
+    )
+
+    answer = queue_actions._tmux_panes_answer_if_requested("what are my panes")
+
+    assert answer is not None
+    assert answer == "I see 1 tmux pane. Hands-free is handsfree running node."
+
+
+def test_pane_answer_summarizes_large_lists_by_default(monkeypatch):
+    monkeypatch.setattr(
+        queue_actions,
+        "_tmux_panes_snapshot",
+        lambda: "\n".join(
+            [
+                f"0:{idx}.1\t%{idx}\tWindow {idx}\t/Users/me/Code/project{idx}\tzsh\ttitle{idx}\t1"
+                for idx in range(1, 6)
+            ]
+        ),
+    )
+
+    answer = queue_actions._tmux_panes_answer_if_requested("what are my panes")
+
+    assert answer is not None
+    assert "Active windows include:" in answer
+    assert "Window 1 is project1 running shell" in answer
+    assert "Window 3 is project3 running shell" in answer
+    assert "Window 4 is project4 running shell" not in answer
+    assert "I skipped 2 more" in answer
+    assert ";" not in answer
+
+
+def test_full_pane_query_lists_every_pane(monkeypatch):
+    monkeypatch.setattr(
+        queue_actions,
+        "_tmux_panes_snapshot",
+        lambda: "\n".join(
+            [
+                f"0:{idx}.1\t%{idx}\tWindow {idx}\t/Users/me/Code/project{idx}\tzsh\ttitle{idx}\t1"
+                for idx in range(1, 5)
+            ]
+        ),
+    )
+
+    answer = queue_actions._tmux_panes_answer_if_requested("full pane list please")
+
+    assert answer is not None
+    assert "The first few are:" not in answer
+    assert "Window 4 is project4 running shell" in answer
+    assert "I skipped" not in answer
+
+
+def test_pane_answer_prefers_active_panes_in_overview(monkeypatch):
+    monkeypatch.setattr(
+        queue_actions,
+        "_tmux_panes_snapshot",
+        lambda: "\n".join(
+            [
+                "0:1.1\t%1\tTraining\t/Users/me/Code/old\tnode\told\t0",
+                "0:1.2\t%2\tTraining\t/Users/me/Code/current\tnode\tcurrent\t1",
+                "0:2.1\t%3\tLogs\t/Users/me/Code/logs\ttail\tlogs\t1",
+                "0:3.1\t%4\tShell\t/Users/me/Code/shell\tzsh\tshell\t1",
+            ]
+        ),
+    )
+
+    answer = queue_actions._tmux_panes_answer_if_requested("what are my panes")
+
+    assert answer is not None
+    assert "Training is current running node" in answer
+    assert "Training is old running node" not in answer

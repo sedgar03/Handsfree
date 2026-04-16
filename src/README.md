@@ -10,8 +10,8 @@
 | `tts.py` | Kokoro TTS client/wrapper — uses resident daemon when warm, macOS `say` fallback |
 | `tts_daemon.py` | Resident Kokoro/macOS speech daemon for warm playback |
 | `stt.py` | mlx-whisper STT wrapper — record from mic via sounddevice, warm and transcribe audio |
-| `summarizer.py` | Summarize agent output for speech; resident MLX backend by default with deterministic fallback |
-| `summary_daemon.py` | Resident Qwen/MLX summarizer daemon |
+| `summarizer.py` | Summarize agent output for speech; resident local backend by default with deterministic fallback |
+| `summary_daemon.py` | Resident summarizer daemon; supports MLX and local GGUF via llama.cpp |
 | `conductor_daemon.py` | Resident local LLM daemon for phase-1 Conductor mode chat; supports MLX and local GGUF via llama.cpp |
 | `conductor_client.py` | Dependency-free socket client for the conductor daemon |
 | `service_control.py` | Start, warm, enable, disable, and inspect Handsfree services |

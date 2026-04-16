@@ -11,18 +11,61 @@ import sys
 import time
 
 from config import get_config, queue_consume_after_timestamp
+from conductor_transcript import append_transcript_event
 from event_queue import AgentEvent, activate_next_event, get_active_event, update_event_status
+from prompt_loader import load_prompt
 from tmux_target import send_text_to_pane
 
 _SKIP_WORDS = {"skip", "dismiss", "clear", "done", "never mind", "nevermind"}
 _REPEAT_WORDS = {"repeat", "say again", "read again"}
 INTRO_PAUSE_SECONDS = 0.5
-_TMUX_PANE_NOUN = r"(?:panes?|pains?|terminals?|windows?)"
+_LOW_INFORMATION_CONDUCTOR_COMMANDS = {
+    "clear throat",
+    "cough",
+    "gasp",
+    "groan",
+    "i",
+    "i am going to go",
+    "im going to go",
+    "im gonna go",
+    "im sorry",
+    "i m going to go",
+    "i m sorry",
+    "laugh",
+    "sorry",
+    "sigh",
+    "sniff",
+    "so",
+    "thank you",
+    "thanks",
+    "you",
+}
+_LOW_INFORMATION_CONDUCTOR_PATTERNS = (
+    re.compile(
+        r"^(?:i\s+am|im)\s+going\s+to\s+put\s+it\s+in\s+the\s+middle\s+of\s+(?:the\s+)?\w+$"
+    ),
+)
+_TMUX_PANE_NOUN = r"(?:panes?|pains?|paints?|terminals?|windows?)"
 _TMUX_PANE_QUERY_RE = re.compile(
     rf"\btmux\b.*\b{_TMUX_PANE_NOUN}\b|"
     rf"\b{_TMUX_PANE_NOUN}\b.*\btmux\b",
     re.IGNORECASE,
 )
+_PLAIN_PANE_QUERY_RE = re.compile(
+    r"\b(?:what|which|list|show|tell\s+me)\b.*\b(?:my\s+)?panes\b|"
+    r"\bpanes\b.*\b(?:open|running|available|have)\b|"
+    r"\bpane\s+list\b",
+    re.IGNORECASE,
+)
+_PANE_DETAIL_QUERY_RE = re.compile(
+    r"\b(?:all|complete|details?|full|every|everything|slow|slowly)\b",
+    re.IGNORECASE,
+)
+DEFAULT_CONDUCTOR_EVENT_PROMPT = """A terminal agent event needs spoken handling.
+Produce the exact concise spoken response for the user.
+Preserve the factual content and any required action.
+If this is a permission event, keep the allow-or-deny instruction.
+Do not use markdown."""
 
 
 @dataclass(slots=True, frozen=True)
@@ -121,11 +164,7 @@ def speak_event_direct(event: AgentEvent) -> bool:
 
 def _conductor_event_prompt(event: AgentEvent) -> str:
     parts = [
-        "A terminal agent event needs spoken handling.",
-        "Produce the exact concise spoken response for the user.",
-        "Preserve the factual content and any required action.",
-        "If this is a permission event, keep the allow-or-deny instruction.",
-        "Do not use markdown.",
+        load_prompt("conductor_event_response.md", DEFAULT_CONDUCTOR_EVENT_PROMPT),
         "",
         f"source: {event.source}",
         f"workflow: {event.workflow}",
@@ -274,16 +313,16 @@ def _tmux_pane_label(pane: TmuxPane) -> str:
 
     prefix = window if window else pane.location
     if prefix and prefix not in {project, command, title}:
-        label = f"{prefix}: {project} running {command}"
+        label = f"{prefix} is {project} running {command}"
     else:
-        label = f"{project} running {command}"
+        label = f"{project} is running {command}"
 
     if title and not host_title and title not in {prefix, project, command}:
-        label = f"{label}, {title}"
+        label = f"{label}, titled {title}"
     return label
 
 
-def _format_tmux_panes_answer(snapshot: str) -> str:
+def _format_tmux_panes_answer(snapshot: str, *, full: bool = False) -> str:
     if snapshot.startswith("tmux pane snapshot unavailable"):
         return snapshot
     if snapshot == "No tmux panes are currently visible.":
@@ -294,9 +333,19 @@ def _format_tmux_panes_answer(snapshot: str) -> str:
         return "No tmux panes are currently visible."
 
     panes = [_parse_tmux_pane(line) for line in lines]
-    labels = [_tmux_pane_label(pane) if pane is not None else line for pane, line in zip(panes, lines)]
-
-    listed = labels[:10]
+    rows = [
+        (pane, _tmux_pane_label(pane) if pane is not None else line)
+        for pane, line in zip(panes, lines)
+    ]
+    if full or len(rows) <= 3:
+        listed = [label for _pane, label in rows]
+        intro = ""
+    else:
+        active_rows = [row for row in rows if row[0] is not None and row[0].active]
+        other_rows = [row for row in rows if not (row[0] is not None and row[0].active)]
+        ordered_rows = active_rows + other_rows
+        listed = [label for _pane, label in ordered_rows[:3]]
+        intro = "Active windows include: " if active_rows else "The first few are: "
     sessions = {
         (pane.location.split(":", 1)[0] if pane is not None else "")
         for pane in panes
@@ -304,18 +353,53 @@ def _format_tmux_panes_answer(snapshot: str) -> str:
     sessions.discard("")
     session_clause = f" across {len(sessions)} sessions" if len(sessions) > 1 else ""
     pane_word = "pane" if len(lines) == 1 else "panes"
-    answer = f"I see {len(lines)} tmux {pane_word}{session_clause}: " + "; ".join(listed) + "."
+    answer = f"I see {len(lines)} tmux {pane_word}{session_clause}. "
+    if full or len(rows) <= 3:
+        answer += " ".join(f"{label}." for label in listed)
+    else:
+        answer += intro + " ".join(f"{label}." for label in listed)
     remainder = len(lines) - len(listed)
     if remainder > 0:
-        answer += f" There are {remainder} more not listed."
+        answer += (
+            f" I skipped {remainder} more so this stays readable. "
+            "Say full pane list if you want every one."
+        )
     return answer
 
 
 def _tmux_panes_answer_if_requested(text: str) -> str | None:
-    normalized = re.sub(r"\s+", " ", text.strip())
-    if not _TMUX_PANE_QUERY_RE.search(normalized):
+    normalized = re.sub(r"\b(?:t|tee)\s+mux\b", "tmux", text.strip(), flags=re.IGNORECASE)
+    normalized = re.sub(r"\s+", " ", normalized)
+    if not (
+        _TMUX_PANE_QUERY_RE.search(normalized)
+        or _PLAIN_PANE_QUERY_RE.search(normalized)
+    ):
         return None
-    return _format_tmux_panes_answer(_tmux_panes_snapshot())
+    return _format_tmux_panes_answer(
+        _tmux_panes_snapshot(),
+        full=bool(_PANE_DETAIL_QUERY_RE.search(normalized)),
+    )
+
+
+def _looks_like_low_information_conductor_command(text: str) -> bool:
+    normalized = re.sub(r"[^\w\s]", " ", text.lower().replace("'", ""))
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized in _LOW_INFORMATION_CONDUCTOR_COMMANDS or any(
+        pattern.match(normalized) for pattern in _LOW_INFORMATION_CONDUCTOR_PATTERNS
+    )
+
+
+def _append_voice_transcript(event_type: str, text: str = "", **data: object) -> None:
+    try:
+        append_transcript_event(
+            "voice",
+            event_type,
+            text=text,
+            data={key: value for key, value in data.items() if value is not None} or None,
+        )
+    except OSError as exc:
+        if os.environ.get("HANDSFREE_DEBUG"):
+            print(f"[queue] conductor transcript write failed: {exc}", file=sys.stderr)
 
 
 def _conductor_turn_text(text: str) -> str:
@@ -323,8 +407,9 @@ def _conductor_turn_text(text: str) -> str:
     current_pane = os.environ.get("TMUX_PANE", "").strip()
     current = f"\nCurrent pane id: {current_pane}" if current_pane else ""
     return (
-        "Host-provided current context follows. Treat it as factual, but do not "
-        "claim broader live tool access.\n\n"
+        "Host-provided current context follows. Treat it as factual. "
+        "If the user asks for fresher pane info or pane contents, use your "
+        "read-only tmux tools.\n\n"
         f"Current tmux panes:{current}\n{panes}\n\n"
         f"User said: {text.strip()}"
     )
@@ -337,9 +422,28 @@ def handle_conductor_text(text: str) -> bool:
         return False
 
     print(f"[queue] Conductor command: {text.strip()}", file=sys.stderr)
+    if _looks_like_low_information_conductor_command(text):
+        print(f"[queue] Ignored low-information conductor command: {text.strip()}", file=sys.stderr)
+        return False
+
     direct_answer = _tmux_panes_answer_if_requested(text)
     if direct_answer is not None:
         print(f"[queue] Answering tmux pane query directly: {direct_answer}", file=sys.stderr)
+        _append_voice_transcript(
+            "user",
+            text.strip(),
+            route="direct_tmux_panes",
+        )
+        _append_voice_transcript(
+            "tool",
+            "list_panes",
+            route="direct_tmux_panes",
+        )
+        _append_voice_transcript(
+            "assistant",
+            direct_answer,
+            route="direct_tmux_panes",
+        )
         _speak(direct_answer)
         return True
 

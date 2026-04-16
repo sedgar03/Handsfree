@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import re
 
+from prompt_loader import load_prompt
+
 EMOTION_TAGS = (
     "angry",
     "fear",
@@ -31,17 +33,29 @@ SOUND_EFFECT_TAGS = (
 
 CHATTERBOX_TAGS = frozenset((*EMOTION_TAGS, *SOUND_EFFECT_TAGS))
 
-CHATTERBOX_PROMPT_GUIDANCE = (
-    "Chatterbox TTS supports bracketed speech tags. "
+DEFAULT_CHATTERBOX_PROMPT_GUIDANCE = (
+    "Chatterbox TTS supports bracketed performance tags, but tags are optional. "
+    "Prefer plain wording unless a tag clearly improves the spoken message. "
     f"Emotion tags: {', '.join(f'[{tag}]' for tag in EMOTION_TAGS)}. "
-    f"Sound effect tags: {', '.join(f'[{tag}]' for tag in SOUND_EFFECT_TAGS)}. "
+    "Sound effect tags: [sigh], [shush], [cough], [groan], [sniff], [gasp], [chuckle], [laugh]. "
     "Use tags sparingly and only when the words justify the performance: "
     "for example [sigh] before an apology or failure, [happy] for relief after success, "
     "[chuckle] or [laugh] only when something is actually funny, and [dramatic] for real stakes. "
     "Put a tag immediately before the sentence or phrase it colors. "
+    "Do not use [clear throat]. Do not put tags on their own line. Do not stack repeated tags. "
     "Use at most one tag in a terse update and at most two tags in a longer spoken answer. "
     "Do not invent tags, and do not tag neutral status text."
 )
+CHATTERBOX_PROMPT_GUIDANCE = load_prompt(
+    "chatterbox_guidance.md",
+    DEFAULT_CHATTERBOX_PROMPT_GUIDANCE,
+)
+
+
+def chatterbox_prompt_guidance(*, enabled: bool = True) -> str:
+    if not enabled:
+        return ""
+    return load_prompt("chatterbox_guidance.md", DEFAULT_CHATTERBOX_PROMPT_GUIDANCE)
 
 _CHATTERBOX_LIKE_TAG_RE = re.compile(r"\[([A-Za-z][A-Za-z -]{0,39})\]")
 

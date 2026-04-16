@@ -59,6 +59,7 @@ def test_detection_reads_queue_without_command_when_current_queue_exists(monkeyp
         wake_models=("hey jarvis",),
         on_command=lambda _command: False,
     )
+    monkeypatch.setattr(openwakeword_listener, "get_config", lambda: {"interaction_mode": "direct"})
     monkeypatch.setattr(listener, "_has_current_queue", lambda: True)
     monkeypatch.setattr(listener, "_read_queue", lambda speak_empty=True: calls.append(speak_empty))
     monkeypatch.setattr(
@@ -76,6 +77,28 @@ def test_detection_reads_queue_without_command_when_current_queue_exists(monkeyp
     )
 
     assert calls == [False]
+
+
+def test_conductor_mode_does_not_auto_read_queue_on_wake(monkeypatch):
+    calls = []
+    listener = openwakeword_listener.OpenWakeWordListener(
+        wake_models=("hey jarvis",),
+        on_command=lambda _command: False,
+    )
+    monkeypatch.setattr(openwakeword_listener, "get_config", lambda: {"interaction_mode": "conductor"})
+    monkeypatch.setattr(listener, "_has_current_queue", lambda: True)
+    monkeypatch.setattr(listener, "_read_queue", lambda speak_empty=True: calls.append(speak_empty))
+    monkeypatch.setattr(listener, "_capture_command", lambda: None)
+
+    listener._handle_detection(
+        openwakeword_listener.WakeDetection(
+            model="hey jarvis",
+            score=0.8,
+            scores={"hey jarvis": 0.8},
+        )
+    )
+
+    assert calls == []
 
 
 def test_detection_captures_freeform_command_when_enabled(monkeypatch):
@@ -108,6 +131,28 @@ def test_detection_captures_freeform_command_when_enabled(monkeypatch):
     )
 
     assert commands == ["run the tests"]
+
+
+def test_handled_command_suppresses_wake_after_tts(monkeypatch):
+    listener = openwakeword_listener.OpenWakeWordListener(
+        wake_models=("hey jarvis",),
+        on_command=lambda _command: True,
+        post_speech_cooldown=4.0,
+    )
+    monkeypatch.setattr(listener, "_has_current_queue", lambda: False)
+    monkeypatch.setattr(listener, "_capture_command", lambda: np.zeros(16000, dtype=np.float32))
+    monkeypatch.setattr(listener, "_handle_command_audio", lambda _audio: True)
+    monkeypatch.setattr(openwakeword_listener.time, "monotonic", lambda: 100.0)
+
+    listener._handle_detection(
+        openwakeword_listener.WakeDetection(
+            model="hey jarvis",
+            score=0.8,
+            scores={"hey jarvis": 0.8},
+        )
+    )
+
+    assert listener._wake_suppressed() is True
 
 
 def test_detection_ignores_freeform_command_by_default(monkeypatch):
@@ -164,6 +209,7 @@ def test_wake_only_command_reads_queue_instead_of_injecting(monkeypatch):
         wake_models=("hey jarvis",),
         on_command=lambda command: commands.append(command) or True,
     )
+    monkeypatch.setattr(openwakeword_listener, "get_config", lambda: {"interaction_mode": "direct"})
     monkeypatch.setattr(listener, "_read_queue", lambda speak_empty=True: reads.append(speak_empty))
     monkeypatch.setattr(openwakeword_listener, "looks_like_hallucination", lambda _text, _duration: False)
 
@@ -180,6 +226,117 @@ def test_wake_only_command_reads_queue_instead_of_injecting(monkeypatch):
 
     assert commands == []
     assert reads == [True]
+
+
+def test_wake_only_command_is_ignored_in_conductor_mode(monkeypatch):
+    reads = []
+    listener = openwakeword_listener.OpenWakeWordListener(
+        wake_models=("hey jarvis",),
+        on_command=lambda _command: True,
+    )
+    monkeypatch.setattr(openwakeword_listener, "get_config", lambda: {"interaction_mode": "conductor"})
+    monkeypatch.setattr(listener, "_read_queue", lambda speak_empty=True: reads.append(speak_empty))
+    monkeypatch.setattr(openwakeword_listener, "looks_like_hallucination", lambda _text, _duration: False)
+
+    class FakeStt:
+        @staticmethod
+        def transcribe(_audio):
+            return "Hey, Jarvis."
+
+    import sys
+
+    monkeypatch.setitem(sys.modules, "stt", FakeStt)
+
+    assert listener._handle_command_audio(np.zeros(16000, dtype=np.float32)) is False
+    assert reads == []
+
+
+def test_noop_command_is_ignored_after_false_wake(monkeypatch):
+    commands = []
+    listener = openwakeword_listener.OpenWakeWordListener(
+        wake_models=("hey jarvis",),
+        on_command=lambda command: commands.append(command) or True,
+    )
+    monkeypatch.setattr(openwakeword_listener, "get_config", lambda: {"interaction_mode": "conductor"})
+    monkeypatch.setattr(openwakeword_listener, "looks_like_hallucination", lambda _text, _duration: False)
+
+    class FakeStt:
+        @staticmethod
+        def transcribe(_audio):
+            return "Thank you."
+
+    import sys
+
+    monkeypatch.setitem(sys.modules, "stt", FakeStt)
+
+    assert listener._handle_command_audio(np.zeros(16000, dtype=np.float32)) is False
+    assert commands == []
+
+
+def test_short_command_fragment_is_ignored_after_false_wake(monkeypatch):
+    commands = []
+    listener = openwakeword_listener.OpenWakeWordListener(
+        wake_models=("hey jarvis",),
+        on_command=lambda command: commands.append(command) or True,
+    )
+    monkeypatch.setattr(openwakeword_listener, "get_config", lambda: {"interaction_mode": "conductor"})
+    monkeypatch.setattr(openwakeword_listener, "looks_like_hallucination", lambda _text, _duration: False)
+
+    class FakeStt:
+        @staticmethod
+        def transcribe(_audio):
+            return "so"
+
+    import sys
+
+    monkeypatch.setitem(sys.modules, "stt", FakeStt)
+
+    assert listener._handle_command_audio(np.zeros(16000, dtype=np.float32)) is False
+    assert commands == []
+
+
+def test_goodbye_hallucination_is_ignored_after_false_wake(monkeypatch):
+    commands = []
+    listener = openwakeword_listener.OpenWakeWordListener(
+        wake_models=("hey jarvis",),
+        on_command=lambda command: commands.append(command) or True,
+    )
+    monkeypatch.setattr(openwakeword_listener, "get_config", lambda: {"interaction_mode": "conductor"})
+    monkeypatch.setattr(openwakeword_listener, "looks_like_hallucination", lambda _text, _duration: False)
+
+    class FakeStt:
+        @staticmethod
+        def transcribe(_audio):
+            return "I'm going to go."
+
+    import sys
+
+    monkeypatch.setitem(sys.modules, "stt", FakeStt)
+
+    assert listener._handle_command_audio(np.zeros(16000, dtype=np.float32)) is False
+    assert commands == []
+
+
+def test_vocalization_noop_is_ignored_after_false_wake(monkeypatch):
+    commands = []
+    listener = openwakeword_listener.OpenWakeWordListener(
+        wake_models=("hey jarvis",),
+        on_command=lambda command: commands.append(command) or True,
+    )
+    monkeypatch.setattr(openwakeword_listener, "get_config", lambda: {"interaction_mode": "conductor"})
+    monkeypatch.setattr(openwakeword_listener, "looks_like_hallucination", lambda _text, _duration: False)
+
+    class FakeStt:
+        @staticmethod
+        def transcribe(_audio):
+            return "Cough."
+
+    import sys
+
+    monkeypatch.setitem(sys.modules, "stt", FakeStt)
+
+    assert listener._handle_command_audio(np.zeros(16000, dtype=np.float32)) is False
+    assert commands == []
 
 
 def test_queue_read_suppresses_wake_after_tts(monkeypatch):

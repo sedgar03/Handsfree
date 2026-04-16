@@ -25,7 +25,7 @@ from pathlib import Path
 # Allow imports from src/ when run from anywhere
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from chatterbox_markup import CHATTERBOX_PROMPT_GUIDANCE
+from chatterbox_markup import chatterbox_prompt_guidance, sanitize_chatterbox_markup
 from config import SUMMARY_SOCKET, get_config
 
 PROMPTS = {
@@ -33,14 +33,14 @@ PROMPTS = {
         "You are a voice assistant giving a spoken status update to a developer. "
         "One sentence max. Lead with what matters: do you need their input, or is everything fine? "
         "Never read out file names, paths, or code. "
-        f"{CHATTERBOX_PROMPT_GUIDANCE} "
+        "{{chatterbox_guidance}} "
         "Here is Claude's output:\n\n"
     ),
     "tiny": (
         "You are a voice assistant giving a very short spoken status update to a developer. "
         "Return 5 to 10 words, one sentence max. Lead with the concrete outcome. "
         "Never read out file names, paths, code, or test counts. "
-        f"{CHATTERBOX_PROMPT_GUIDANCE} "
+        "{{chatterbox_guidance}} "
         "Here is Claude's output:\n\n"
     ),
     "detailed": (
@@ -56,14 +56,30 @@ PROMPTS = {
         "- Don't cherry-pick one change and ignore others.\n"
         "- NEVER read out file names, file paths, function names, or code.\n"
         "- Speak naturally like a coworker giving a quick update.\n"
-        f"- {CHATTERBOX_PROMPT_GUIDANCE}\n"
+        "{{chatterbox_guidance}}"
         "- 2-3 sentences max.\n"
+        "Here is Claude's output:\n\n"
+    ),
+    "expanded": (
+        "You are a voice assistant giving a fuller spoken status update to a developer "
+        "thinking through documents or research. Rules:\n"
+        "- Lead with whether you need their input or not.\n"
+        "- If Claude is asking the user a question or presenting choices, "
+        "clearly state the question and read out each option without choosing.\n"
+        "- If no question, cover the meaningful context, changes, evidence, and next step. "
+        "Do not cherry-pick one detail and ignore others.\n"
+        "- Mention filenames, paths, commands, test counts, or bullets only when essential. "
+        "When essential, paraphrase them in plain spoken language instead of reading raw syntax.\n"
+        "- Speak naturally like a coworker giving a careful update.\n"
+        "{{chatterbox_guidance}}"
+        "- 3-5 sentences max.\n"
         "Here is Claude's output:\n\n"
     ),
 }
 
 _CODE_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 _MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
+_MARKDOWN_TABLE_ROW_RE = re.compile(r"(?m)^\s*\|.*\|\s*$")
 _ABS_PATH_RE = re.compile(r"(?:~|/[\w .@+-]+)(?:/[\w .@+-]+)+")
 _INLINE_CODE_RE = re.compile(r"`([^`]+)`")
 _BULLET_RE = re.compile(r"(?m)^\s*(?:[-*+]|\d+[.)])\s+")
@@ -89,7 +105,7 @@ _QUESTION_SENTENCE_RE = re.compile(
     re.IGNORECASE,
 )
 _PREFIXES = ("no input needed", "i need your input")
-VALID_VERBOSITIES = {"direct", "detailed", "terse", "tiny"}
+VALID_VERBOSITIES = {"direct", "expanded", "detailed", "terse", "tiny"}
 
 
 def _normalize_verbosity(verbosity: str | None) -> str:
@@ -98,18 +114,38 @@ def _normalize_verbosity(verbosity: str | None) -> str:
     return "detailed"
 
 
+def _active_chatterbox_guidance() -> str:
+    try:
+        enabled = get_config().get("tts_provider") == "chatterbox"
+    except Exception:
+        enabled = False
+    guidance = chatterbox_prompt_guidance(enabled=enabled)
+    if not guidance:
+        return ""
+    return f"- {guidance}\n"
+
+
+def _prompt_for_verbosity(verbosity: str) -> str:
+    prompt = PROMPTS.get(verbosity, PROMPTS["detailed"])
+    return prompt.replace("{{chatterbox_guidance}}", _active_chatterbox_guidance())
+
+
 def _limit_for_verbosity(verbosity: str) -> int:
     if verbosity == "tiny":
-        return 140
+        return 180
     if verbosity == "terse":
-        return 220
-    return 420
+        return 320
+    if verbosity == "expanded":
+        return 1600
+    return 800
 
 
 def _max_sentences_for_verbosity(verbosity: str) -> int:
     if verbosity in {"terse", "tiny"}:
         return 1
-    return 2
+    if verbosity == "expanded":
+        return 4
+    return 3
 
 
 def _resolve_claude_bin() -> str | None:
@@ -136,6 +172,7 @@ def _clean_for_voice(text: str) -> str:
     """Strip markup and code-heavy content that sounds bad over TTS."""
 
     text = _CODE_FENCE_RE.sub(" I included code or commands in the response. ", text)
+    text = _MARKDOWN_TABLE_ROW_RE.sub(" ", text)
     text = _MARKDOWN_LINK_RE.sub(r"\1", text)
 
     def _inline_code_repl(match: re.Match[str]) -> str:
@@ -173,10 +210,23 @@ def _sentences(text: str) -> list[str]:
     return sentences
 
 
+def _is_rhetorical_question(sentence: str) -> bool:
+    lowered = sentence.lower()
+    return (
+        "question is exactly" in lowered
+        or "question is:" in lowered
+        or lowered.startswith("the question is")
+        or lowered.startswith("so yes, the question is")
+    )
+
+
 def _needs_input(cleaned: str) -> bool:
     lowered = cleaned.lower()
     return (
-        "?" in cleaned
+        any(
+            sentence.rstrip().endswith("?") and not _is_rhetorical_question(sentence)
+            for sentence in _sentences(cleaned)
+        )
         or any(hint in lowered for hint in _QUESTION_HINTS)
         or bool(_QUESTION_SENTENCE_RE.search(cleaned))
     )
@@ -187,7 +237,7 @@ def _input_request_text(cleaned: str) -> str:
 
     sentences = _sentences(cleaned)
     for sentence in reversed(sentences):
-        if sentence.rstrip().endswith("?"):
+        if sentence.rstrip().endswith("?") and not _is_rhetorical_question(sentence):
             return sentence
 
     for sentence in reversed(sentences):
@@ -205,6 +255,15 @@ def _strip_spoken_prefix(text: str) -> str:
         if lowered.startswith(prefix):
             return stripped[len(prefix) :].lstrip(" .:")
     return stripped
+
+
+def _sanitize_spoken_summary(text: str, verbosity: str) -> str:
+    try:
+        allow_tags = get_config().get("tts_provider") == "chatterbox"
+    except Exception:
+        allow_tags = False
+    max_tags = 1 if verbosity in {"tiny", "terse"} else 2
+    return sanitize_chatterbox_markup(text, allow_tags=allow_tags, max_tags=max_tags)
 
 
 def _summary_mode(cleaned: str) -> str:
@@ -262,7 +321,7 @@ def summarize_claude(text: str, verbosity: str = "detailed") -> str:
     if verbosity == "direct":
         return summarize_local(text, verbosity=verbosity)
 
-    prompt_prefix = PROMPTS.get(verbosity, PROMPTS["detailed"])
+    prompt_prefix = _prompt_for_verbosity(verbosity)
     full_prompt = prompt_prefix + text
 
     try:
@@ -385,10 +444,12 @@ def summarize(
         backend = config.get("summary_backend", "mlx")
 
     if backend == "claude":
-        return summarize_claude(text, verbosity=verbosity)
-    if backend == "mlx":
-        return summarize_mlx(text, verbosity=verbosity)
-    return summarize_local(text, verbosity=verbosity)
+        result = summarize_claude(text, verbosity=verbosity)
+    elif backend == "mlx":
+        result = summarize_mlx(text, verbosity=verbosity)
+    else:
+        result = summarize_local(text, verbosity=verbosity)
+    return _sanitize_spoken_summary(result, verbosity)
 
 
 if __name__ == "__main__":

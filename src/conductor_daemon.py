@@ -9,103 +9,168 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import signal
-import shutil
 import socket
-import subprocess
 import sys
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any
 
 # Allow imports from src/ when run directly.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from chatterbox_markup import CHATTERBOX_PROMPT_GUIDANCE
+from chatterbox_markup import chatterbox_prompt_guidance
 from config import CONDUCTOR_PID, CONDUCTOR_SOCKET, REPO_ROOT, get_config
+from conductor_harness import (
+    ConductorHarness,
+    json_candidates as _json_candidates,
+    parse_tool_call as _parse_tool_call,
+    strip_thinking_markup as _strip_thinking_markup,
+    tool_result_message as _tool_result_message,
+)
+from conductor_models import ConductorModelAdapter
+from conductor_tools import execute_tool, tools_prompt
+from conductor_transcript import append_transcript_event
+from prompt_loader import load_prompt
 from service_control import write_service_status
 
-SYSTEM_PROMPT = f"""You are the Handsfree conductor: a resident local voice interface for a developer.
+DEFAULT_SYSTEM_PROMPT = """You are the Handsfree conductor: a resident local voice interface for a developer.
 You are not the main coding model. You are a fast collaborator and orchestrator.
-For now, no external tools are connected, so do not claim to inspect files, control tmux, or launch agents.
-You may receive host-provided context snapshots, such as current tmux panes. Use those snapshots as factual context without implying broader live tool access.
+{{tool_guidance}}
+Only answer the user's current request. Do not volunteer status updates, pane summaries, task claims, or next actions the user did not ask for.
+If the user asks what panes are open or what a pane is doing, use the tmux tools. If the needed information is not available from those tools, say what is missing.
+Do not claim a file changed, a command ran, a model finished, or an agent did work unless that fact is explicitly present in the current user text or host context.
 Help the user think, clarify intent, and say what you would delegate when heavier work is needed.
 Keep responses natural, concrete, and short enough for text-to-speech.
+Do not use markdown, bullet lists, tables, code fences, or decorative formatting in spoken replies.
 Use emotionally legible wording when it fits the situation: relief for success, mild concern for risk, apology when something fails, dry humor only when it is genuinely appropriate.
-{CHATTERBOX_PROMPT_GUIDANCE}
-When a future tool action is needed, name the action plainly instead of pretending it already happened."""
-
-_THINKING_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
-_LLAMA_BACKEND_NAMES = {"llama.cpp", "llamacpp", "llama_cpp", "gguf"}
+{{chatterbox_guidance}}
+For pane write/control requests, use the controlled pane tools only when the user explicitly asks for a specific pane action. Never claim text was sent, focus changed, or a command ran unless the tool result says it succeeded."""
 
 
-def _strip_thinking_markup(text: str) -> str:
-    text = _THINKING_RE.sub("", text)
-    text = text.replace("<think>", "").replace("</think>", "")
-    return text.strip()
+def load_conductor_system_prompt() -> str:
+    config = get_config()
+    return load_prompt(
+        "conductor_system.md",
+        DEFAULT_SYSTEM_PROMPT,
+        {
+            "tool_guidance": tools_prompt(),
+            "chatterbox_guidance": chatterbox_prompt_guidance(
+                enabled=config.get("tts_provider") == "chatterbox"
+            )
+        },
+    )
 
 
-def _normalize_backend(value: object, model_id: str) -> str:
-    backend = str(value or "auto").strip().lower()
-    if backend in _LLAMA_BACKEND_NAMES:
-        return "llama.cpp"
-    if backend == "mlx":
-        return "mlx"
-    if backend != "auto":
-        return "mlx"
-
-    expanded = os.path.expanduser(model_id)
-    if expanded.endswith(".gguf"):
-        return "llama.cpp"
-    candidate = Path(expanded)
-    if not candidate.is_absolute():
-        candidate = REPO_ROOT / candidate
-    if candidate.is_dir() and any(candidate.glob("*.gguf")):
-        return "llama.cpp"
-    return "mlx"
+SYSTEM_PROMPT = load_conductor_system_prompt()
 
 
 class ConductorDaemon:
     def __init__(self) -> None:
         self.config = get_config()
-        self.model_id = str(
-            self.config.get("conductor_model")
-            or "mlx-community/Qwen3.5-2B-OptiQ-4bit"
-        )
-        self.backend = _normalize_backend(
-            self.config.get("conductor_backend"),
-            self.model_id,
-        )
-        self.temperature = float(self.config.get("conductor_temperature") or 0.3)
-        self.max_tokens = int(self.config.get("conductor_max_tokens") or 180)
-        self.history_turns = max(1, int(self.config.get("conductor_history_turns") or 8))
-        self.llama_server_bin = str(
-            self.config.get("conductor_llama_server_bin") or "llama-server"
-        )
-        self.llama_host = str(self.config.get("conductor_llama_host") or "127.0.0.1")
-        self.llama_port = int(self.config.get("conductor_llama_port") or 8091)
-        self.llama_ctx_size = int(self.config.get("conductor_llama_ctx_size") or 8192)
-        self.llama_gpu_layers = self.config.get("conductor_llama_gpu_layers", "auto")
-        self.llama_start_timeout = float(
-            self.config.get("conductor_llama_start_timeout") or 300.0
-        )
-        self.llama_chat_timeout = float(
-            self.config.get("conductor_llama_chat_timeout") or 120.0
-        )
-        extra_args = self.config.get("conductor_llama_extra_args") or []
-        self.llama_extra_args = (
-            [str(arg) for arg in extra_args] if isinstance(extra_args, list) else []
-        )
         self.started_at = time.time()
-        self.model = None
-        self.tokenizer = None
-        self.sampler = None
-        self.llama_process: subprocess.Popen | None = None
-        self.llama_ready = False
-        self.histories: dict[str, list[dict[str, str]]] = {}
+        self.model_adapter = ConductorModelAdapter(self.config, repo_root=REPO_ROOT)
+        self.harness = ConductorHarness(
+            complete_chat=lambda messages: self._complete_chat(messages),
+            load_system_prompt=load_conductor_system_prompt,
+            history_turns=int(self.config.get("conductor_history_turns") or 8),
+            tool_max_rounds=int(self.config.get("conductor_tool_max_rounds") or 1),
+            transcript_enabled=bool(self.config.get("conductor_transcript_enabled", True)),
+            tool_executor=lambda name, args, **kwargs: execute_tool(name, args, **kwargs),
+            transcript_writer=lambda conversation_id, event_type, **kwargs: append_transcript_event(
+                conversation_id,
+                event_type,
+                **kwargs,
+            ),
+        )
+
+    @property
+    def model_id(self) -> str:
+        return self.model_adapter.model_id
+
+    @property
+    def backend(self) -> str:
+        return self.model_adapter.backend
+
+    @property
+    def temperature(self) -> float:
+        return self.model_adapter.temperature
+
+    @temperature.setter
+    def temperature(self, value: float) -> None:
+        self.model_adapter.temperature = float(value)
+
+    @property
+    def max_tokens(self) -> int:
+        return self.model_adapter.max_tokens
+
+    @max_tokens.setter
+    def max_tokens(self, value: int) -> None:
+        self.model_adapter.max_tokens = int(value)
+
+    @property
+    def history_turns(self) -> int:
+        return self.harness.history_turns
+
+    @history_turns.setter
+    def history_turns(self, value: int) -> None:
+        self.harness.history_turns = max(1, int(value))
+
+    @property
+    def tool_max_rounds(self) -> int:
+        return self.harness.tool_max_rounds
+
+    @tool_max_rounds.setter
+    def tool_max_rounds(self, value: int) -> None:
+        self.harness.tool_max_rounds = max(0, int(value))
+
+    @property
+    def transcript_enabled(self) -> bool:
+        return self.harness.transcript_enabled
+
+    @transcript_enabled.setter
+    def transcript_enabled(self, value: bool) -> None:
+        self.harness.transcript_enabled = bool(value)
+
+    @property
+    def histories(self) -> dict[str, list[dict[str, str]]]:
+        return self.harness.histories
+
+    @property
+    def model(self) -> Any:
+        return self.model_adapter.model
+
+    @model.setter
+    def model(self, value: Any) -> None:
+        self.model_adapter.model = value
+
+    @property
+    def tokenizer(self) -> Any:
+        return self.model_adapter.tokenizer
+
+    @tokenizer.setter
+    def tokenizer(self, value: Any) -> None:
+        self.model_adapter.tokenizer = value
+
+    @property
+    def sampler(self) -> Any:
+        return self.model_adapter.sampler
+
+    @sampler.setter
+    def sampler(self, value: Any) -> None:
+        self.model_adapter.sampler = value
+
+    @property
+    def llama(self):
+        return self.model_adapter.llama
+
+    @property
+    def llama_ready(self) -> bool:
+        return self.model_adapter.llama_ready
+
+    @llama_ready.setter
+    def llama_ready(self, value: bool) -> None:
+        self.model_adapter.llama_ready = bool(value)
 
     def load(self) -> None:
         write_service_status(
@@ -114,26 +179,8 @@ class ConductorDaemon:
             backend=self.backend,
             model=self.model_id,
         )
-        if self.backend == "llama.cpp":
-            self._load_llama_cpp()
-            write_service_status(
-                "conductor",
-                "ready",
-                backend=self.backend,
-                model=self.model_id,
-                server=self._llama_base_url(),
-            )
-            return
-
-        self._load_mlx()
-        write_service_status("conductor", "ready", backend=self.backend, model=self.model_id)
-
-    def _load_mlx(self) -> None:
-        from mlx_lm import load
-        from mlx_lm.sample_utils import make_sampler
-
-        self.model, self.tokenizer = load(self.model_id)
-        self.sampler = make_sampler(temp=self.temperature)
+        self.model_adapter.load()
+        write_service_status("conductor", "ready", **self.status_details())
 
     def status(self) -> dict[str, Any]:
         payload = {
@@ -146,190 +193,61 @@ class ConductorDaemon:
             "uptime_seconds": round(time.time() - self.started_at, 3),
         }
         if self.backend == "llama.cpp":
-            payload["server"] = self._llama_base_url()
+            payload["server"] = self.llama.base_url()
         return payload
 
+    def status_details(self) -> dict[str, Any]:
+        return self.model_adapter.status_details()
+
     def reset(self, conversation_id: str) -> dict[str, Any]:
-        self.histories.pop(conversation_id, None)
-        return {"ok": True, "conversation_id": conversation_id, "reset": True}
+        return self.harness.reset(conversation_id)
+
+    def _append_transcript(
+        self,
+        conversation_id: str,
+        event_type: str,
+        text: str = "",
+        data: dict[str, Any] | None = None,
+    ) -> None:
+        self.harness.append_transcript(conversation_id, event_type, text=text, data=data)
 
     def chat(self, text: str, *, conversation_id: str, reset: bool = False) -> str:
-        if self.backend == "mlx" and (
-            self.model is None or self.tokenizer is None or self.sampler is None
-        ):
-            raise RuntimeError("model is not loaded")
-        if self.backend == "llama.cpp" and not self.llama_ready:
-            raise RuntimeError("llama.cpp server is not loaded")
+        self.model_adapter.ensure_ready()
+        return self.harness.chat(text, conversation_id=conversation_id, reset=reset)
 
-        text = text.strip()
-        if not text:
-            return ""
-        if reset:
-            self.histories.pop(conversation_id, None)
-
-        history = self.histories.setdefault(conversation_id, [])
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            *history,
-            {"role": "user", "content": text},
-        ]
-
+    def _complete_chat(self, messages: list[dict[str, str]]) -> str:
         if self.backend == "llama.cpp":
-            response = self._chat_llama_cpp(messages)
-        else:
-            response = self._chat_mlx(messages)
-        response = _strip_thinking_markup(str(response))
-        history.extend(
-            [
-                {"role": "user", "content": text},
-                {"role": "assistant", "content": response},
-            ]
-        )
-        del history[: max(0, len(history) - self.history_turns * 2)]
-        return response
+            return self._chat_llama_cpp(messages)
+        return self._chat_mlx(messages)
 
     def _chat_mlx(self, messages: list[dict[str, str]]) -> str:
-        prompt = self._apply_chat_template(messages)
-
-        from mlx_lm import generate
-
-        return str(
-            generate(
-                self.model,
-                self.tokenizer,
-                prompt=prompt,
-                max_tokens=self.max_tokens,
-                sampler=self.sampler,
-                verbose=False,
-            )
+        return self.model_adapter.chat_mlx(
+            messages,
+            apply_template=lambda prompt_messages: self._apply_chat_template(
+                prompt_messages
+            ),
         )
 
     def _apply_chat_template(self, messages: list[dict[str, str]]) -> str:
-        try:
-            return self.tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True,
-                enable_thinking=False,
-            )
-        except TypeError:
-            return self.tokenizer.apply_chat_template(
-                messages,
-                tokenize=False,
-                add_generation_prompt=True,
-            )
-
-    def _resolve_llama_model_path(self) -> Path:
-        raw = Path(os.path.expanduser(self.model_id))
-        candidates = [raw] if raw.is_absolute() else [REPO_ROOT / raw, raw]
-        for candidate in candidates:
-            if candidate.is_file():
-                return candidate.resolve()
-            if candidate.is_dir():
-                gguf_files = sorted(candidate.glob("*.gguf"))
-                if len(gguf_files) == 1:
-                    return gguf_files[0].resolve()
-                if len(gguf_files) > 1:
-                    names = ", ".join(path.name for path in gguf_files[:5])
-                    raise RuntimeError(
-                        f"conductor_model directory contains multiple GGUF files: {names}"
-                    )
-        raise RuntimeError(f"GGUF conductor model not found: {self.model_id}")
-
-    def _llama_base_url(self) -> str:
-        return f"http://{self.llama_host}:{self.llama_port}"
+        return self.model_adapter.apply_chat_template(messages)
 
     def _llama_server_command(self) -> list[str]:
-        model_path = self._resolve_llama_model_path()
-        binary = shutil.which(self.llama_server_bin) or self.llama_server_bin
-        command = [
-            binary,
-            "--model",
-            str(model_path),
-            "--host",
-            self.llama_host,
-            "--port",
-            str(self.llama_port),
-            "--ctx-size",
-            str(self.llama_ctx_size),
-            "--n-gpu-layers",
-            str(self.llama_gpu_layers),
-            "--no-webui",
-        ]
-        command.extend(self.llama_extra_args)
-        return command
+        return self.model_adapter.command()
 
     def _load_llama_cpp(self) -> None:
-        if self._llama_health(timeout=0.5):
-            self.llama_ready = True
-            return
-
-        command = self._llama_server_command()
-        self.llama_process = subprocess.Popen(command, cwd=str(REPO_ROOT))
-        self._wait_for_llama_server()
-        self.llama_ready = True
+        self.model_adapter.load_llama_cpp()
 
     def _llama_health(self, *, timeout: float) -> bool:
-        try:
-            with urllib.request.urlopen(
-                f"{self._llama_base_url()}/health",
-                timeout=timeout,
-            ) as resp:
-                return 200 <= int(resp.status) < 500
-        except (OSError, urllib.error.URLError, TimeoutError):
-            return False
+        return self.model_adapter.health(timeout=timeout)
 
     def _wait_for_llama_server(self) -> None:
-        deadline = time.monotonic() + self.llama_start_timeout
-        while time.monotonic() < deadline:
-            if self.llama_process is not None and self.llama_process.poll() is not None:
-                raise RuntimeError(
-                    f"llama-server exited before becoming ready: {self.llama_process.returncode}"
-                )
-            if self._llama_health(timeout=1.0):
-                return
-            time.sleep(0.5)
-        raise TimeoutError(f"llama-server did not become ready at {self._llama_base_url()}")
+        self.model_adapter.wait_for_llama_server()
 
     def _chat_llama_cpp(self, messages: list[dict[str, str]]) -> str:
-        payload = {
-            "model": self.model_id,
-            "messages": messages,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
-            "stream": False,
-        }
-        data = json.dumps(payload).encode("utf-8")
-        request = urllib.request.Request(
-            f"{self._llama_base_url()}/v1/chat/completions",
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=self.llama_chat_timeout) as resp:
-                response = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"llama.cpp chat failed: {exc.code} {detail}") from exc
-        except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            raise RuntimeError(f"llama.cpp chat failed: {exc}") from exc
-
-        try:
-            content = response["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise RuntimeError(f"bad llama.cpp chat response: {response}") from exc
-        return str(content)
+        return self.model_adapter.chat_llama_cpp(messages)
 
     def close(self) -> None:
-        if self.llama_process is None or self.llama_process.poll() is not None:
-            return
-        self.llama_process.terminate()
-        try:
-            self.llama_process.wait(timeout=5.0)
-        except subprocess.TimeoutExpired:
-            self.llama_process.kill()
-            self.llama_process.wait(timeout=5.0)
+        self.model_adapter.close()
 
 
 def _read_request(conn: socket.socket) -> dict[str, Any]:
@@ -348,7 +266,10 @@ def _read_request(conn: socket.socket) -> dict[str, Any]:
 
 
 def _send_response(conn: socket.socket, payload: dict[str, Any]) -> None:
-    conn.sendall((json.dumps(payload) + "\n").encode("utf-8"))
+    try:
+        conn.sendall((json.dumps(payload) + "\n").encode("utf-8"))
+    except OSError:
+        return
 
 
 def _serve(daemon: ConductorDaemon) -> None:
@@ -390,11 +311,13 @@ def _serve(daemon: ConductorDaemon) -> None:
                 elif command == "reset":
                     _send_response(conn, daemon.reset(conversation_id))
                 elif command == "chat":
+                    write_service_status("conductor", "active", **daemon.status_details())
                     response = daemon.chat(
                         str(request.get("text") or ""),
                         conversation_id=conversation_id,
                         reset=bool(request.get("reset")),
                     )
+                    write_service_status("conductor", "ready", **daemon.status_details())
                     _send_response(
                         conn,
                         {
@@ -408,6 +331,12 @@ def _serve(daemon: ConductorDaemon) -> None:
                 else:
                     _send_response(conn, {"ok": False, "error": "unknown command"})
             except Exception as exc:  # noqa: BLE001
+                write_service_status(
+                    "conductor",
+                    "error",
+                    **daemon.status_details(),
+                    error=str(exc),
+                )
                 _send_response(conn, {"ok": False, "error": str(exc)})
 
 

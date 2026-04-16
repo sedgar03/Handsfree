@@ -16,7 +16,7 @@ hud = ["PySide6>=6.6"]
 
 [project.scripts]
 usage-hud = "model_usage_hud.cli:main"
-usage-hud-app = "model_usage_hud.app.main:main"
+handsfree-hud = "model_usage_hud.app.main:main"
 
 [tool.setuptools]
 py-modules = ["usage_hud"]

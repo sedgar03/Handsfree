@@ -11,6 +11,7 @@ from __future__ import annotations
 import html
 import json
 import os
+import shlex
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -34,6 +35,7 @@ from model_usage_hud.core.state import load_ui_state, save_ui_state
 from PySide6.QtCore import QObject, QRunnable, Qt, QThreadPool, QTimer, Signal
 from PySide6.QtGui import QFontMetrics, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QApplication,
     QDoubleSpinBox,
     QFrame,
     QGridLayout,
@@ -53,11 +55,14 @@ GEOMETRY_RE = re.compile(r"^(?P<w>\d+)x(?P<h>\d+)\+(?P<x>-?\d+)\+(?P<y>-?\d+)$")
 MUTE_PATHS: dict[ProviderName, Path] = {
     "claude": Path.home() / ".claude" / "mute",
     "codex": Path.home() / ".codex" / "mute",
+    "gemini": Path.home() / ".gemini" / "mute",
 }
 SPEECH_TOGGLE_PATH = Path.home() / ".handsfree" / "speech-enabled"
 LEGACY_SPEECH_TOGGLE_PATH = Path.home() / ".claude" / "handsfree"
 WAKE_TOGGLE_PATH = Path.home() / ".handsfree" / "wake-enabled"
 CONSUME_AFTER_PATH = Path.home() / ".handsfree" / "consume-after"
+HUD_ACTION_LOG_PATH = Path.home() / ".handsfree" / "logs" / "hud-actions.log"
+SERVICE_STATUS_DIR = Path.home() / ".handsfree" / "services"
 VOICE_CONFIG_PATH = Path.home() / ".claude" / "voice-config.json"
 SOUND_THEME_PATH = Path.home() / ".claude" / "theme"
 SOUND_THEME_ROOT = Path.home() / ".claude" / "hooks" / "sounds"
@@ -135,7 +140,7 @@ CHATTERBOX_VOICE_OPTIONS: tuple[tuple[str, str, bool], ...] = (
 )
 DEFAULT_CHATTERBOX_VOICE = "default"
 CHATTERBOX_STYLE_OPTIONS: tuple[tuple[str, str, bool], ...] = (
-    ("Auto (context)", "auto", True),
+    ("Prompt tags", "auto", True),
     ("Off", "neutral", True),
     ("Force Happy", "happy", True),
     ("Force Sarcastic", "sarcastic", True),
@@ -157,16 +162,26 @@ INTERACTION_MODES: tuple[tuple[str, str, bool], ...] = (
 )
 SPEECH_VERBOSITY_OPTIONS: tuple[tuple[str, str], ...] = (
     ("Original", "direct"),
+    ("Expanded", "expanded"),
     ("Detailed", "detailed"),
     ("Brief", "terse"),
     ("Tiny", "tiny"),
 )
 DEFAULT_SPEECH_VERBOSITY = "detailed"
-CONDUCTOR_MODELS: tuple[tuple[str, str, bool], ...] = (
-    ("Qwen 2B", "mlx-community/Qwen3.5-2B-OptiQ-4bit", True),
+LOCAL_LLM_MODELS: tuple[tuple[str, str, str, bool], ...] = (
+    ("Qwen 2B", "mlx-community/Qwen3.5-2B-OptiQ-4bit", "mlx", True),
+    ("SuperGemma 26B", "models/supergemma4-26b-uncensored-gguf-v2", "llama.cpp", True),
 )
+LOCAL_LLM_MODEL_OPTIONS: tuple[tuple[str, str | None, bool], ...] = tuple(
+    (label, model, enabled) for label, model, _backend, enabled in LOCAL_LLM_MODELS
+)
+LOCAL_LLM_MODEL_BACKENDS: dict[str, str] = {
+    model: backend for _label, model, backend, _enabled in LOCAL_LLM_MODELS
+}
+DEFAULT_LOCAL_LLM_MODEL = "mlx-community/Qwen3.5-2B-OptiQ-4bit"
 DEFAULT_INTERACTION_MODE = "off"
 DEFAULT_ACTIVE_INTERACTION_MODE = "direct"
+VALID_TTS_PROVIDER_VALUES = {"kokoro", "chatterbox"}
 
 # Grid column indices — one source of truth for layout math.
 # ``COL_METRIC`` used to be two columns (``COL_LABEL`` + ``COL_VALUE``)
@@ -180,9 +195,8 @@ COL_LOGO = 0
 COL_METRIC = 1
 COL_BAR = 2
 COL_DETAIL = 3
-# Mute used to live in a trailing column, but providers had inconsistent
-# support (Gemini has no mute file) and the bell column added dead space
-# on every row. It is now a single global control in the top bar.
+# Mute used to live in a trailing column, but the bell column added dead
+# space on every row. It is now a single global control in the top bar.
 
 # Visual tuning.
 PROVIDER_LOGO_PX = 22
@@ -336,6 +350,41 @@ def _uv_command() -> str:
     raise RuntimeError("uv not found")
 
 
+def _compact_handsfree_error(message: str) -> str:
+    lines = [line.strip() for line in message.splitlines() if line.strip()]
+    if not lines:
+        return "unknown error"
+    if lines[0].startswith("Traceback "):
+        return lines[-1]
+    return lines[0]
+
+
+def _append_hud_action_log(
+    *,
+    action: str,
+    command: list[str],
+    returncode: int | None,
+    stdout: str | None,
+    stderr: str | None,
+) -> None:
+    try:
+        HUD_ACTION_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        command_text = " ".join(shlex.quote(part) for part in command)
+        timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+        with HUD_ACTION_LOG_PATH.open("a") as log:
+            log.write(f"[{timestamp}] action={action} returncode={returncode}\n")
+            log.write(f"$ {command_text}\n")
+            if stderr:
+                log.write("--- stderr ---\n")
+                log.write(stderr.rstrip() + "\n")
+            if stdout:
+                log.write("--- stdout ---\n")
+                log.write(stdout.rstrip() + "\n")
+            log.write("\n")
+    except OSError:
+        return
+
+
 class HandsfreeActionWorker(QRunnable):
     """Run a Handsfree broker command without blocking the HUD."""
 
@@ -353,7 +402,16 @@ class HandsfreeActionWorker(QRunnable):
         self.signals = HandsfreeActionSignals()
 
     def run(self) -> None:
+        command = ["uv", "run", "python", "-m", "broker", *self.broker_args]
         try:
+            command = [
+                _uv_command(),
+                "run",
+                "python",
+                "-m",
+                "broker",
+                *self.broker_args,
+            ]
             if not (HANDSFREE_REPO_ROOT / "src" / "broker.py").exists():
                 raise RuntimeError(f"Handsfree repo not found: {HANDSFREE_REPO_ROOT}")
             env = {
@@ -361,7 +419,7 @@ class HandsfreeActionWorker(QRunnable):
                 "PYTHONPATH": str(HANDSFREE_REPO_ROOT / "src"),
             }
             result = subprocess.run(
-                [_uv_command(), "run", "python", "-m", "broker", *self.broker_args],
+                command,
                 cwd=str(HANDSFREE_REPO_ROOT),
                 env=env,
                 capture_output=True,
@@ -370,10 +428,24 @@ class HandsfreeActionWorker(QRunnable):
                 check=False,
             )
         except Exception as exc:  # noqa: BLE001
+            _append_hud_action_log(
+                action=self.action,
+                command=command,
+                returncode=None,
+                stdout=None,
+                stderr=str(exc),
+            )
             self.signals.failed.emit(self.action, str(exc))
             return
 
         if result.returncode != 0:
+            _append_hud_action_log(
+                action=self.action,
+                command=command,
+                returncode=result.returncode,
+                stdout=result.stdout,
+                stderr=result.stderr,
+            )
             message = (result.stderr or result.stdout or "Handsfree command failed").strip()
             self.signals.failed.emit(self.action, message)
             return
@@ -408,6 +480,7 @@ class HudWindow(QWidget):
         self._ui_state = load_ui_state()
         self._last_sections: tuple[ProviderSection, ...] = ()
         self._provider_buttons: dict[ProviderName, QPushButton] = {}
+        self._service_status_widgets: dict[str, tuple[QFrame, QLabel]] = {}
         self._select_popup: QFrame | None = None
         # Cached tuple of (provider, rows, notes) counts from the last render;
         # changes here gate calls to ``adjustSize`` so routine refreshes don't
@@ -433,7 +506,7 @@ class HudWindow(QWidget):
         ):
             self.config.font_size = float(self._ui_state.font_size)
 
-        self.setWindowTitle("usage-hud-app")
+        self.setWindowTitle("handsfree-hud")
         self.setStyleSheet(build_stylesheet(self.config.font_size))
         # Cap overall width so long notes (e.g. HTTP 429 error bodies) wrap
         # rather than stretching the whole panel. The minimum width comes
@@ -498,11 +571,9 @@ class HudWindow(QWidget):
             top_bar.addWidget(button)
         self._refresh_provider_buttons()
         top_bar.addSpacing(CONTROL_GROUP_GAP_PX)
-        # Global mute toggle — one button flips *all* providers at once.
-        # The per-row bells were inconsistent (Gemini has no mute file) and
-        # chewed up a dedicated grid column for ~two providers. A single
-        # header control matches how the user thinks about notifications:
-        # on or off for the whole HUD, not per-engine.
+        # Global mute toggle — one button flips all hooked providers at once.
+        # A single header control matches how the user thinks about
+        # notifications: on or off for the whole HUD, not per-engine.
         self.mute_button = self._build_icon_button(
             "bell",
             tooltip="Mute notifications",
@@ -558,14 +629,191 @@ class HudWindow(QWidget):
         inner.addLayout(self.grid)
         self._configure_grid_columns()
 
+        self.service_status_row = self._build_service_status_row()
+        inner.addLayout(self.service_status_row)
+
         self.error_label = QLabel("")
         self.error_label.setObjectName("status")
         self.error_label.hide()
         inner.addWidget(self.error_label)
+        self._refresh_service_indicators()
+
+        self.settings_divider_gap = QWidget(self._root_frame)
+        self.settings_divider_gap.setFixedHeight(4)
+        self.settings_divider_gap.hide()
+        inner.addWidget(self.settings_divider_gap)
 
         self.settings_panel = self._build_settings_panel()
         self.settings_panel.hide()
         inner.addWidget(self.settings_panel)
+
+    def _build_service_status_row(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 6, 0, 3)
+        row.setSpacing(8)
+        for key in ("voice", "llm", "tts", "mic"):
+            group = QHBoxLayout()
+            group.setContentsMargins(0, 0, 0, 0)
+            group.setSpacing(3)
+            dot = QFrame(self._root_frame)
+            dot.setFixedSize(7, 7)
+            label = QLabel("", self._root_frame)
+            label.setObjectName("status")
+            self._service_status_widgets[key] = (dot, label)
+            group.addWidget(dot)
+            group.addWidget(label)
+            row.addLayout(group)
+        row.addStretch(1)
+        return row
+
+    def _read_service_status(self, name: str) -> dict:
+        try:
+            payload = json.loads((SERVICE_STATUS_DIR / f"{name}.json").read_text())
+        except (OSError, json.JSONDecodeError):
+            return {"state": "unknown"}
+        return payload if isinstance(payload, dict) else {"state": "unknown"}
+
+    def _set_service_indicator(
+        self,
+        key: str,
+        text: str,
+        color: str,
+        tooltip: str,
+    ) -> None:
+        dot, label = self._service_status_widgets[key]
+        dot.setStyleSheet(
+            f"background: {color}; border: 1px solid {COLORS['border']}; "
+            "border-radius: 3px;"
+        )
+        dot.setToolTip(tooltip)
+        label.setText(text)
+        label.setToolTip(tooltip)
+
+    def _desired_tts_provider(self) -> str:
+        provider = self._read_voice_config().get("tts_provider")
+        if isinstance(provider, str) and provider in VALID_TTS_PROVIDER_VALUES:
+            return provider
+        return DEFAULT_TTS_PROVIDER
+
+    def _refresh_service_indicators(self) -> None:
+        mode = self._current_interaction_mode()
+        speech_enabled = self._is_speech_enabled()
+        wake_enabled = self._is_wake_enabled()
+        if speech_enabled:
+            voice_text = "Voice"
+            voice_color = COLORS["green"]
+            voice_tip = f"Voice mode is {mode}; speech readout is enabled."
+        elif wake_enabled:
+            voice_text = "Voice"
+            voice_color = COLORS["green"]
+            voice_tip = "Wake listening is enabled; speech readout is on demand."
+        else:
+            voice_text = "Voice"
+            voice_color = COLORS["muted"]
+            voice_tip = "Speech readout and wake listening are off."
+        self._set_service_indicator("voice", voice_text, voice_color, voice_tip)
+
+        self._refresh_llm_indicator()
+        self._refresh_tts_indicator()
+        self._refresh_mic_indicator()
+
+    def _refresh_llm_indicator(self) -> None:
+        status = self._read_service_status("summary")
+        state = str(status.get("state") or "unknown")
+        desired_model = self._current_local_llm_model()
+        desired_backend = LOCAL_LLM_MODEL_BACKENDS.get(desired_model, "mlx")
+        actual_model = status.get("model")
+        actual_backend = status.get("backend")
+        stale = state == "ready" and (
+            (isinstance(actual_model, str) and actual_model != desired_model)
+            or (isinstance(actual_backend, str) and actual_backend != desired_backend)
+        )
+        text = "LLM"
+        if state == "error":
+            color = COLORS["red"]
+        elif state == "active":
+            color = COLORS["cyan"]
+        elif state == "starting":
+            color = COLORS["yellow"]
+        elif stale:
+            color = COLORS["yellow"]
+        elif state == "ready":
+            color = COLORS["green"]
+        elif state == "stopped":
+            color = COLORS["muted"]
+        else:
+            color = COLORS["yellow"]
+        tip = (
+            f"LLM state: {state}. Current: {actual_backend or 'unknown'} "
+            f"{actual_model or 'unknown'}. Desired: {desired_backend} {desired_model}."
+        )
+        if status.get("error"):
+            tip += f" Error: {status['error']}"
+        self._set_service_indicator("llm", text, color, tip)
+
+    def _refresh_tts_indicator(self) -> None:
+        status = self._read_service_status("tts")
+        state = str(status.get("state") or "unknown")
+        desired = self._desired_tts_provider()
+        engine = status.get("engine")
+        requested = status.get("requested_engine")
+        stale = state == "ready" and (
+            (isinstance(requested, str) and requested != desired)
+            or (
+                not isinstance(requested, str)
+                and isinstance(engine, str)
+                and engine != desired
+            )
+        )
+        fallback = bool(status.get("fallback_reason")) or (
+            state == "ready" and requested == desired and engine != desired
+        )
+        text = "TTS"
+        if isinstance(engine, str) and engine:
+            text = f"TTS {engine.title()}"
+        elif desired:
+            text = f"TTS {desired.title()}"
+        if state == "error":
+            color = COLORS["red"]
+        elif state == "active":
+            color = COLORS["cyan"]
+        elif state == "starting":
+            color = COLORS["yellow"]
+        elif stale:
+            color = COLORS["yellow"]
+        elif fallback:
+            color = COLORS["yellow"]
+        elif state == "ready":
+            color = COLORS["green"]
+        elif state == "stopped":
+            color = COLORS["muted"]
+        else:
+            color = COLORS["yellow"]
+        tip = f"TTS state: {state}. Current: {engine or 'unknown'}. Desired: {desired}."
+        if status.get("fallback_reason"):
+            tip += f" Fallback: {status['fallback_reason']}"
+        if status.get("error"):
+            tip += f" Error: {status['error']}"
+        self._set_service_indicator("tts", text, color, tip)
+
+    def _refresh_mic_indicator(self) -> None:
+        status = self._read_service_status("listener")
+        state = str(status.get("state") or "unknown")
+        text = "Mic"
+        if self._is_wake_enabled() and state in {"ready", "running"}:
+            color = COLORS["green"]
+        elif self._is_wake_enabled() and state == "starting":
+            color = COLORS["yellow"]
+        elif state == "error":
+            color = COLORS["red"]
+        elif self._is_wake_enabled():
+            color = COLORS["yellow"]
+        else:
+            color = COLORS["muted"]
+        tip = f"Mic state: {state}. Wake enabled: {self._is_wake_enabled()}."
+        if status.get("error"):
+            tip += f" Error: {status['error']}"
+        self._set_service_indicator("mic", text, color, tip)
 
     def _build_settings_panel(self) -> QFrame:
         panel = QFrame(self._root_frame)
@@ -573,7 +821,7 @@ class HudWindow(QWidget):
         panel.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
         self.settings_panel_layout = QVBoxLayout(panel)
-        self.settings_panel_layout.setContentsMargins(6, 8, 6, 8)
+        self.settings_panel_layout.setContentsMargins(6, 10, 6, 8)
         self.settings_panel_layout.setSpacing(5)
         self.settings_panel_layout.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
         self._active_settings_panel: str | None = None
@@ -585,32 +833,47 @@ class HudWindow(QWidget):
             lambda _pos, name=panel_name: self._toggle_settings_panel(name)
         )
 
-    def _settings_row(self, icon_name: str) -> tuple[QHBoxLayout, QVBoxLayout]:
+    def _settings_row(
+        self,
+        icon_name: str,
+        *,
+        icon_clicked: object | None = None,
+        icon_tooltip: str = "",
+        icon_accessible: str = "",
+    ) -> tuple[QHBoxLayout, QVBoxLayout]:
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(4)
 
-        icon_label = QLabel(self.settings_panel)
-        icon_label.setPixmap(
-            ui_pixmap(
-                icon_name,
-                size_px=UI_ICON_PX,
-                color=COLORS["fg"],
-                dpr=self.devicePixelRatioF(),
+        if icon_clicked is None:
+            icon_widget = QLabel(self.settings_panel)
+            icon_widget.setPixmap(
+                ui_pixmap(
+                    icon_name,
+                    size_px=UI_ICON_PX,
+                    color=COLORS["fg"],
+                    dpr=self.devicePixelRatioF(),
+                )
             )
-        )
-        icon_label.setFixedSize(UI_ICON_PX + 10, UI_ICON_PX + 10)
-        icon_label.setAlignment(
-            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter
-        )
-        row.addWidget(icon_label)
+            icon_widget.setAlignment(
+                Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignHCenter
+            )
+        else:
+            icon_widget = self._build_icon_button(
+                icon_name,
+                tooltip=icon_tooltip,
+                accessible=icon_accessible or icon_tooltip,
+            )
+            icon_widget.clicked.connect(icon_clicked)
+        icon_widget.setFixedSize(UI_ICON_PX + 10, UI_ICON_PX + 10)
+        row.addWidget(icon_widget)
 
         column = QVBoxLayout()
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(3)
         column.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
         row.addLayout(column, 1)
-        row.setAlignment(icon_label, Qt.AlignmentFlag.AlignTop)
+        row.setAlignment(icon_widget, Qt.AlignmentFlag.AlignTop)
         return row, column
 
     def _clear_settings_panel(self) -> None:
@@ -629,11 +892,13 @@ class HudWindow(QWidget):
             self._build_wake_panel()
         else:
             self._build_mode_panel()
+        self.settings_divider_gap.show()
         self.settings_panel.show()
         self._refit_window(force=True)
 
     def _hide_settings_panel(self) -> None:
         self._close_select_popup()
+        self.settings_divider_gap.hide()
         self.settings_panel.hide()
         self._active_settings_panel = None
         self._clear_settings_panel()
@@ -687,7 +952,12 @@ class HudWindow(QWidget):
         self.settings_panel_layout.addLayout(row)
 
     def _build_mode_panel(self) -> None:
-        row, column = self._settings_row("user-sound")
+        row, column = self._settings_row(
+            "user-sound",
+            icon_clicked=self._copy_conductor_watcher_command,
+            icon_tooltip="Copy conductor watcher tmux command",
+            icon_accessible="Copy conductor watcher command",
+        )
 
         mode = self._current_interaction_mode()
         column.addWidget(
@@ -721,7 +991,21 @@ class HudWindow(QWidget):
                 ),
                 provider_options,
                 self._tts_provider_selected,
-                setting_label="Model",
+                setting_label="TTS",
+            )
+        )
+
+        readout_model = self._current_local_llm_model()
+        column.addWidget(
+            self._build_select_button(
+                self._label_for_value(
+                    LOCAL_LLM_MODEL_OPTIONS,
+                    readout_model,
+                    "Custom LLM",
+                ),
+                LOCAL_LLM_MODEL_OPTIONS,
+                self._local_llm_model_selected,
+                setting_label="LLM",
             )
         )
 
@@ -745,7 +1029,7 @@ class HudWindow(QWidget):
                     self._label_for_value(
                         CHATTERBOX_STYLE_OPTIONS,
                         chatterbox_style,
-                        "Auto (context)",
+                        "Prompt tags",
                     ),
                     CHATTERBOX_STYLE_OPTIONS,
                     self._chatterbox_style_selected,
@@ -754,10 +1038,14 @@ class HudWindow(QWidget):
             )
             column.addWidget(
                 self._build_slider(
-                    "Load",
+                    "Tag cap" if chatterbox_style == "auto" else "Intensity",
                     self._current_chatterbox_style_strength(),
                     self._chatterbox_style_strength_changed,
-                    formatter=lambda value: f"{round(value * 100):.0f}%",
+                    formatter=(
+                        lambda value: f"{self._chatterbox_tag_cap_for_strength(value)} tags"
+                        if chatterbox_style == "auto"
+                        else f"{round(value * 100):.0f}%"
+                    ),
                 )
             )
             column.addWidget(
@@ -820,24 +1108,25 @@ class HudWindow(QWidget):
             speed_row.addStretch(1)
             column.addLayout(speed_row)
 
-        if mode == "conductor":
-            config = self._read_voice_config()
-            model = config.get("conductor_model")
-            model_value = (
-                model
-                if isinstance(model, str) and model.strip()
-                else "mlx-community/Qwen3.5-2B-OptiQ-4bit"
-            )
-            column.addWidget(
-                self._build_select_button(
-                    self._label_for_value(CONDUCTOR_MODELS, model_value, "Qwen 2B"),
-                    CONDUCTOR_MODELS,
-                    self._conductor_model_selected,
-                    setting_label="Conductor",
-                )
-            )
-
         self.settings_panel_layout.addLayout(row)
+
+    @staticmethod
+    def _conductor_watcher_tmux_command() -> str:
+        repo = shlex.quote(str(HANDSFREE_REPO_ROOT))
+        return (
+            f"cd {repo} && "
+            "PYTHONPATH=src uv run python -m broker conductor pane "
+            "--conversation-id voice"
+        )
+
+    def _copy_conductor_watcher_command(self) -> None:
+        app = QApplication.instance()
+        if app is None:
+            self._show_error("Clipboard unavailable.")
+            return
+        command = self._conductor_watcher_tmux_command()
+        app.clipboard().setText(command)
+        self._show_error("Copied conductor watcher tmux command.")
 
     def _build_wake_panel(self) -> None:
         row, column = self._settings_row("microphone")
@@ -1105,6 +1394,8 @@ class HudWindow(QWidget):
         except OSError as exc:
             self._show_error(f"Could not write voice config: {exc}")
             return
+        self._refresh_service_indicators()
+        self._warm_voice_stack_if_active()
         QTimer.singleShot(0, lambda: self._show_settings_panel("mode"))
 
     def _current_chatterbox_voice(self) -> str:
@@ -1146,6 +1437,16 @@ class HudWindow(QWidget):
         except (TypeError, ValueError):
             return 0.35
         return max(0.0, min(1.0, strength))
+
+    @staticmethod
+    def _chatterbox_tag_cap_for_strength(strength: float) -> int:
+        if strength <= 0:
+            return 0
+        if strength <= 0.4:
+            return 1
+        if strength <= 0.75:
+            return 2
+        return 3
 
     def _chatterbox_style_strength_changed(self, strength: float) -> None:
         config = self._read_voice_config()
@@ -1237,6 +1538,7 @@ class HudWindow(QWidget):
         self._apply_interaction_mode_runtime(mode)
         self._refresh_mode_icon()
         self._refresh_wake_icon()
+        self._refresh_service_indicators()
         if self.settings_panel.isVisible():
             QTimer.singleShot(0, lambda: self._show_settings_panel("mode"))
 
@@ -1269,13 +1571,31 @@ class HudWindow(QWidget):
         except OSError as exc:
             self._show_error(f"Could not write voice config: {exc}")
 
-    def _conductor_model_selected(self, model: str) -> None:
+    def _current_local_llm_model(self) -> str:
         config = self._read_voice_config()
+        for key in ("summary_model", "conductor_model"):
+            model = config.get(key)
+            if isinstance(model, str) and model.strip():
+                return model.strip()
+        return DEFAULT_LOCAL_LLM_MODEL
+
+    def _local_llm_model_selected(self, model: str) -> None:
+        backend = LOCAL_LLM_MODEL_BACKENDS.get(model, "auto")
+        config = self._read_voice_config()
+        config["summary_backend"] = "mlx"
+        config["summary_model_backend"] = backend
+        config["summary_model"] = model
+        config["conductor_backend"] = backend
         config["conductor_model"] = model
         try:
             self._write_voice_config(config)
         except OSError as exc:
             self._show_error(f"Could not write voice config: {exc}")
+            return
+        self._refresh_service_indicators()
+        self._warm_voice_stack_if_active()
+        if self.settings_panel.isVisible():
+            QTimer.singleShot(0, lambda: self._show_settings_panel("mode"))
 
     def _current_voice_spec(self) -> str:
         config = self._read_voice_config()
@@ -1498,6 +1818,7 @@ class HudWindow(QWidget):
         self.error_label.hide()
         self._last_sections = sections
         self._render_grid(sections)
+        self._refresh_service_indicators()
         self._apply_refresh_tooltip(bundle)
 
         # Only refit the window when auto-fit is on AND the grid's row
@@ -1856,12 +2177,14 @@ class HudWindow(QWidget):
     def _handsfree_action_succeeded(self, action: str, _stdout: object) -> None:
         self._handsfree_action_workers.pop(action, None)
         self._refresh_handsfree_button_for_action(action)
+        self._refresh_service_indicators()
 
     def _handsfree_action_failed(self, action: str, message: str) -> None:
         self._handsfree_action_workers.pop(action, None)
         self._refresh_handsfree_button_for_action(action)
-        first_line = message.strip().splitlines()[0] if message.strip() else "unknown error"
-        self._show_error(f"Handsfree {action} failed — {first_line[:180]}")
+        self._refresh_service_indicators()
+        compact = _compact_handsfree_error(message)
+        self._show_error(f"Handsfree {action} failed — {compact[:180]}")
 
     def _toggle_provider(self, provider: ProviderName) -> None:
         selected = set(self.config.selected_providers)
@@ -1917,9 +2240,7 @@ class HudWindow(QWidget):
 
         "Muted" is an all-or-nothing global state from the UI's point of
         view: if anything is currently muted the click clears them all,
-        otherwise we create mute files for every provider that supports
-        one. Gemini isn't in :data:`MUTE_PATHS` because it has no mute
-        hook — that's intentional, not a bug.
+        otherwise we create mute files for every hooked provider.
         """
 
         target_muted = not self._is_any_muted()
@@ -1965,14 +2286,14 @@ class HudWindow(QWidget):
         if not self._is_speech_enabled():
             self._start_handsfree_action(
                 "enable-speech",
-                ["enable", "speech", "--timeout", "120"],
+                ["enable", "speech", "--timeout", "300"],
                 button=self.mode_button,
                 loading_tooltip="Starting speech...",
-                timeout=130.0,
+                timeout=310.0,
             )
 
-    def _disable_speech_if_needed(self) -> None:
-        if self._is_speech_enabled():
+    def _disable_speech_if_needed(self, *, force: bool = False) -> None:
+        if force or self._is_speech_enabled():
             self._start_handsfree_action(
                 "disable-speech",
                 ["disable", "speech"],
@@ -1985,14 +2306,19 @@ class HudWindow(QWidget):
         if not self._is_wake_enabled():
             self._start_handsfree_action(
                 "enable-wake",
-                ["enable", "wake", "--timeout", "120"],
+                ["enable", "wake", "--timeout", "300"],
                 button=self.wake_button,
                 loading_tooltip="Starting mic...",
-                timeout=130.0,
+                timeout=310.0,
             )
 
-    def _disable_wake_if_needed(self, *, button: QPushButton | None = None) -> None:
-        if self._is_wake_enabled():
+    def _disable_wake_if_needed(
+        self,
+        *,
+        button: QPushButton | None = None,
+        force: bool = False,
+    ) -> None:
+        if force or self._is_wake_enabled():
             self._start_handsfree_action(
                 "disable-wake",
                 ["disable", "wake"],
@@ -2004,16 +2330,27 @@ class HudWindow(QWidget):
     def _warm_conductor_if_needed(self) -> None:
         self._start_handsfree_action(
             "warm-conductor",
-            ["warm", "conductor", "--timeout", "120"],
+            ["warm", "conductor", "--timeout", "300"],
             button=self.mode_button,
             loading_tooltip="Starting conductor...",
-            timeout=130.0,
+            timeout=310.0,
+        )
+
+    def _warm_voice_stack_if_active(self) -> None:
+        if not (self._is_speech_enabled() or self._is_wake_enabled()):
+            return
+        self._start_handsfree_action(
+            "warm-speech",
+            ["warm", "speech", "--timeout", "300"],
+            button=self.mode_button,
+            loading_tooltip="Applying voice settings...",
+            timeout=310.0,
         )
 
     def _apply_interaction_mode_runtime(self, mode: str) -> None:
         if mode == "off":
-            self._disable_speech_if_needed()
-            self._disable_wake_if_needed(button=self.mode_button)
+            self._disable_speech_if_needed(force=True)
+            self._disable_wake_if_needed(button=self.mode_button, force=True)
             return
         if mode == "on_demand":
             self._disable_speech_if_needed()

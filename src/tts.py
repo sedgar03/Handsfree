@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11,<3.12"
-# dependencies = ["kokoro-onnx", "sounddevice", "soundfile", "numpy", "chatterbox-tts>=0.1.7"]
+# dependencies = ["kokoro-onnx==0.4.9", "sounddevice", "soundfile", "numpy"]
 # [tool.uv.extra-build-dependencies]
 # pkuseg = ["numpy"]
 # ///
@@ -19,6 +19,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -29,7 +30,6 @@ sys.path.insert(0, str(_repo_root / "src"))
 
 from chatterbox_markup import (
     CHATTERBOX_TAGS,
-    extract_chatterbox_tags,
     sanitize_chatterbox_markup,
 )
 from config import get_config
@@ -43,8 +43,11 @@ DEFAULT_CHATTERBOX_REFERENCE = (
     Path.home() / "Code" / "fish-audio-local" / "voices" / "vctk-p238" / "reference.wav"
 )
 VALID_TTS_PROVIDERS = {"kokoro", "chatterbox"}
+CHATTERBOX_CHUNK_CHARS = 420
+CHATTERBOX_CHUNK_SILENCE_SECONDS = 0.08
 # Lazy-initialized Kokoro instance
 _kokoro = None
+_kokoro_error: str | None = None
 _chatterbox = None
 _chatterbox_conditioned_ref: str | None = None
 _chatterbox_device_name: str | None = None
@@ -52,18 +55,21 @@ _chatterbox_device_name: str | None = None
 
 def _get_kokoro():
     """Lazy-init Kokoro. Returns the Kokoro instance or None if models missing."""
-    global _kokoro
+    global _kokoro, _kokoro_error
     if _kokoro is not None:
         return _kokoro
 
     if not KOKORO_MODEL.exists() or not KOKORO_VOICES.exists():
+        _kokoro_error = "Kokoro model files are missing"
         return None
 
     try:
         from kokoro_onnx import Kokoro
         _kokoro = Kokoro(str(KOKORO_MODEL), str(KOKORO_VOICES))
+        _kokoro_error = None
         return _kokoro
     except Exception as e:
+        _kokoro_error = str(e)
         print(f"[handsfree] Kokoro init failed: {e}", file=sys.stderr)
         return None
 
@@ -111,6 +117,9 @@ def _get_chatterbox(device: str = "cpu"):
 
 
 def _tts_provider(config: dict) -> str:
+    forced = os.environ.get("HANDSFREE_TTS_PROVIDER_FORCE")
+    if forced in VALID_TTS_PROVIDERS:
+        return str(forced)
     provider = config.get("tts_provider")
     if isinstance(provider, str) and provider in VALID_TTS_PROVIDERS:
         return provider
@@ -158,85 +167,6 @@ def _chatterbox_tag_budget(strength: float) -> int:
     return 3
 
 
-def _text_matches(text: str, patterns: tuple[str, ...]) -> bool:
-    return any(re.search(pattern, text) for pattern in patterns)
-
-
-def _infer_chatterbox_tags(text: str, strength: float) -> list[str]:
-    normalized = re.sub(r"\s+", " ", text.lower())
-    if strength < 0.15:
-        return []
-
-    tags: list[str] = []
-
-    def add(tag: str) -> None:
-        if tag not in tags:
-            tags.append(tag)
-
-    if _text_matches(normalized, (r"\b(sorry|apologize|apologies|unfortunately)\b",)):
-        add("sigh")
-    if _text_matches(
-        normalized,
-        (
-            r"\b(error|failed|failure|failing|broken|blocked|timeout|exception|crash|denied)\b",
-            r"\bcould not\b",
-            r"\bcan't\b",
-            r"\bunable\b",
-        ),
-    ):
-        add("sigh")
-        if strength > 0.55:
-            add("dramatic")
-    if _text_matches(normalized, (r"\b(permission|allow or deny|needs approval)\b",)):
-        add("clear throat")
-    if _text_matches(
-        normalized,
-        (
-            r"\b(passed|green|success|succeeded|complete|completed|done|fixed|merged|deployed)\b",
-            r"\ball tests\b",
-        ),
-    ):
-        add("happy")
-    if _text_matches(
-        normalized,
-        (
-            r"\b(wait|unexpected|surprising|surprised|actually worked|first try)\b",
-            r"\?",
-        ),
-    ):
-        add("surprised")
-    if _text_matches(normalized, (r"\b(lol|haha|funny|laugh|hilarious)\b",)):
-        add("laugh" if strength > 0.65 else "chuckle")
-    if _text_matches(
-        normalized,
-        (
-            r"\b(of course|classic|sure, let's|totally going to|what could go wrong)\b",
-        ),
-    ):
-        add("sarcastic")
-    if _text_matches(normalized, (r"\b(secret|quietly|don't tell|do not tell)\b",)):
-        add("whispering")
-    if _text_matches(
-        normalized,
-        (
-            r"\b(production|prod|database|cluster|security|leak|on fire|no backups)\b",
-        ),
-    ):
-        add("dramatic")
-        if strength > 0.75:
-            add("fear")
-
-    if _text_matches(
-        normalized,
-        (
-            r"\b(all my work is gone|lost everything|force-pushed|branch is gone)\b",
-        ),
-    ):
-        add("crying")
-
-    return tags
-
-
 def _tile_chatterbox_tags(text: str, tags: list[str], strength: float) -> str:
     budget = _chatterbox_tag_budget(strength)
     selected = tags[:budget]
@@ -254,30 +184,6 @@ def _tile_chatterbox_tags(text: str, tags: list[str], strength: float) -> str:
     return f"{prefix} {text}"
 
 
-def _auto_chatterbox_tagged_text(text: str, strength: float) -> str:
-    budget = _chatterbox_tag_budget(strength)
-    if budget <= 0:
-        return text
-
-    sentences = [part for part in re.split(r"(?<=[.!?])\s+", text.strip()) if part]
-    if not sentences:
-        return text
-
-    remaining = budget
-    rendered: list[str] = []
-    for sentence in sentences:
-        tags = _infer_chatterbox_tags(sentence, strength)
-        if tags and remaining > 0:
-            tag_count = 1
-            if strength > 0.75:
-                tag_count = min(2, len(tags), remaining)
-            selected = tags[:tag_count]
-            sentence = "".join(f"[{tag}]" for tag in selected) + f" {sentence}"
-            remaining -= len(selected)
-        rendered.append(sentence)
-    return " ".join(rendered)
-
-
 def _chatterbox_tagged_text(text: str, config: dict) -> str:
     style = config.get("chatterbox_style")
     strength = _clamped_float(config, "chatterbox_style_strength", 0.0, 0.0, 1.0)
@@ -290,9 +196,7 @@ def _chatterbox_tagged_text(text: str, config: dict) -> str:
     if not isinstance(style, str) or style == "neutral":
         return text
     if style == "auto":
-        if extract_chatterbox_tags(text):
-            return text
-        return _auto_chatterbox_tagged_text(text, strength)
+        return text
     if style not in CHATTERBOX_TAGS:
         return text
     return _tile_chatterbox_tags(text, [style], strength)
@@ -310,6 +214,80 @@ def _chatterbox_generate_kwargs(config: dict) -> dict[str, float | int]:
             2.0,
         ),
     }
+
+
+def _split_chatterbox_chunks(
+    text: str,
+    *,
+    max_chars: int | None = None,
+) -> list[str]:
+    limit = CHATTERBOX_CHUNK_CHARS if max_chars is None else max_chars
+    text = text.strip()
+    if not text:
+        return []
+
+    chunks: list[str] = []
+    for paragraph in re.split(r"\n\s*\n+", text):
+        paragraph = re.sub(r"\s+", " ", paragraph.strip())
+        if not paragraph:
+            continue
+        chunks.extend(_split_chatterbox_paragraph(paragraph, limit))
+    return chunks
+
+
+def _split_chatterbox_paragraph(text: str, limit: int) -> list[str]:
+    if len(text) <= limit:
+        return [text]
+
+    sentences = [part for part in re.split(r"(?<=[.!?])\s+", text) if part]
+    chunks: list[str] = []
+    current = ""
+
+    for sentence in sentences:
+        candidate = f"{current} {sentence}".strip() if current else sentence
+        if current and len(candidate) > limit:
+            chunks.append(current)
+            current = sentence
+        else:
+            current = candidate
+
+    if current:
+        chunks.append(current)
+
+    split_chunks: list[str] = []
+    for chunk in chunks:
+        while len(chunk) > limit:
+            head = chunk[:limit].rsplit(" ", 1)[0].strip()
+            if not head:
+                break
+            split_chunks.append(head)
+            chunk = chunk[len(head) :].strip()
+        if chunk:
+            split_chunks.append(chunk)
+    return split_chunks
+
+
+def _concat_audio_chunks(
+    chunks: list[np.ndarray],
+    sample_rate: int,
+    *,
+    silence_seconds: float = CHATTERBOX_CHUNK_SILENCE_SECONDS,
+) -> np.ndarray:
+    if not chunks:
+        return np.array([], dtype=np.float32)
+    if len(chunks) == 1:
+        return chunks[0]
+
+    silence_len = max(1, int(sample_rate * silence_seconds))
+    pieces: list[np.ndarray] = []
+    for index, chunk in enumerate(chunks):
+        if index:
+            if chunk.ndim == 1:
+                pieces.append(np.zeros(silence_len, dtype=np.float32))
+            else:
+                pieces.append(np.zeros((silence_len, chunk.shape[1]), dtype=np.float32))
+        pieces.append(chunk)
+    return np.concatenate(pieces, axis=0)
 
 
 def _resolve_voice(voice_spec: str, kokoro):
@@ -342,9 +320,39 @@ def _resolve_voice(voice_spec: str, kokoro):
     return blend
 
 
+def _play_audio_with_afplay(samples, sample_rate: int) -> bool:
+    """Play samples through macOS afplay, matching notification playback."""
+
+    try:
+        import soundfile as sf
+    except ImportError:
+        return False
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+    path = Path(tmp.name)
+    tmp.close()
+    try:
+        sf.write(path, np.asarray(samples, dtype=np.float32), int(sample_rate))
+        result = subprocess.run(
+            ["afplay", str(path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        return result.returncode == 0
+    except OSError:
+        return False
+    finally:
+        path.unlink(missing_ok=True)
+
+
 def _play_audio(samples, sample_rate: int):
     """Play audio samples through the default output device."""
+    if sys.platform == "darwin" and _play_audio_with_afplay(samples, sample_rate):
+        return
+
     import sounddevice as sd
+
     sd.play(samples, samplerate=sample_rate)
     sd.wait()
 
@@ -357,8 +365,14 @@ def _say_fallback(text: str):
 def _warm_kokoro() -> dict:
     kokoro = _get_kokoro()
     if kokoro is None:
-        return {"ok": True, "engine": "say", "ready": True}
-    return {"ok": True, "engine": "kokoro", "ready": True}
+        return {
+            "ok": True,
+            "engine": "say",
+            "requested_engine": "kokoro",
+            "fallback_reason": _kokoro_error or "Kokoro unavailable",
+            "ready": True,
+        }
+    return {"ok": True, "engine": "kokoro", "requested_engine": "kokoro", "ready": True}
 
 
 def _warm_chatterbox(config: dict) -> dict:
@@ -369,6 +383,7 @@ def _warm_chatterbox(config: dict) -> dict:
     return {
         "ok": True,
         "engine": "chatterbox",
+        "requested_engine": "chatterbox",
         "voice": voice,
         "voice_source": voice_source,
         "ready": True,
@@ -433,11 +448,14 @@ def _speak_chatterbox(text: str, *, voice: str | None, config: dict) -> str:
     model = _get_chatterbox(_chatterbox_device(config))
     reference_path = _chatterbox_reference_path(config, voice)
     _prepare_chatterbox_voice(model, reference_path)
-    wav = model.generate(
-        _chatterbox_tagged_text(text, config),
-        **_chatterbox_generate_kwargs(config),
-    )
-    _play_audio(_chatterbox_samples_to_numpy(wav), int(model.sr))
+    generate_kwargs = _chatterbox_generate_kwargs(config)
+    audio_chunks = []
+    for chunk in _split_chatterbox_chunks(_chatterbox_tagged_text(text, config)):
+        wav = model.generate(chunk, **generate_kwargs)
+        audio_chunks.append(_chatterbox_samples_to_numpy(wav))
+    if audio_chunks:
+        sample_rate = int(model.sr)
+        _play_audio(_concat_audio_chunks(audio_chunks, sample_rate), sample_rate)
     return "chatterbox"
 
 

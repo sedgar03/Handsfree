@@ -69,7 +69,7 @@ The launcher will:
 3. Launch `claude`
 4. Stop listener + disable handsfree mode when Claude exits
 
-The listener-only command runs in the foreground. Use it when `usage-hud-app`
+The listener-only command runs in the foreground. Use it when `handsfree-hud`
 is your control surface and Claude/Codex are already running in tmux panes.
 Wake phrase mode is armed by the HUD wake button.
 
@@ -96,7 +96,7 @@ No second click is required when `auto_submit_after_transcription` is enabled.
 
 Wake word mode avoids AirPods media-key routing:
 
-1. Start `usage-hud-app`.
+1. Start `uv run --extra hud handsfree-hud`.
 2. Turn on the wake button.
 3. Wait for the loading icon to switch to the enabled microphone.
 4. Say the OpenWakeWord phrase, then a command.
@@ -164,6 +164,7 @@ Recommended baseline:
   "input_mode": "media_key",
   "verbosity": "detailed",
   "summary_backend": "mlx",
+  "summary_model_backend": "auto",
   "summary_model": "mlx-community/Qwen3.5-2B-OptiQ-4bit",
   "kokoro_voice": "af_heart",
   "voice_presets": {
@@ -195,7 +196,9 @@ Useful toggles:
 
 - `input_mode`: `media_key` or `hotkey`
 - `summary_backend`: `mlx` for the resident local Qwen summarizer, `local` for deterministic summaries only, or `claude` for legacy `claude -p`
-- `summary_model`: MLX model used by the resident summary daemon
+- `summary_model`: model used by the resident summary daemon
+- `summary_model_backend`: `auto`, `mlx`, or `llama.cpp`; `auto` chooses llama.cpp for local GGUF paths
+- `verbosity`: `tiny`, `terse`, `detailed`, `expanded`, or `direct`; use `expanded` for fuller document/research readouts
 - `auto_submit`: enable/disable Enter submit behavior
 - `auto_submit_after_transcription`: if `true`, submit immediately after STT result is injected
 - `silence_timeout`: seconds of silence before auto-stop

@@ -104,14 +104,14 @@ AirPods mode with auto-send enabled:
 # 2a) Start a handsfree Claude session with AirPods controls
 ./scripts/handsfree.sh --media-key
 
-# 2b) Or start only the listener, for use with usage-hud-app
+# 2b) Or start only the listener, for use with handsfree-hud
 ./scripts/listener.sh --media-key
 
 # 2c) Or avoid AirPods stem clicks and use wake phrase mode
 ./scripts/listener.sh --wake-word
 
 # 2d) Launch the integrated usage + handsfree control HUD
-uv run --extra hud usage-hud-app
+uv run --extra hud handsfree-hud
 ```
 
 When Claude exits, the launcher cleans up automatically.
@@ -218,7 +218,7 @@ PYTHONPATH=src uv run python -m broker list
 PYTHONPATH=src uv run python -m broker list --current
 
 # Usage HUD from this repo
-uv run --extra hud usage-hud-app
+uv run --extra hud handsfree-hud
 uv run usage-hud --help
 ```
 
@@ -237,6 +237,7 @@ Example:
   "input_mode": "media_key",
   "verbosity": "detailed",
   "summary_backend": "mlx",
+  "summary_model_backend": "auto",
   "summary_model": "mlx-community/Qwen3.5-2B-OptiQ-4bit",
   "interaction_mode": "off",
   "last_interaction_mode": "direct",
@@ -278,12 +279,14 @@ Per-terminal override (no config edits required):
 ```bash
 HANDSFREE_CONDUCTOR_MODEL=models/supergemma4-26b-uncensored-gguf-v2 \
   HANDSFREE_CONDUCTOR_BACKEND=llama.cpp \
+  HANDSFREE_SUMMARY_MODEL=models/supergemma4-26b-uncensored-gguf-v2 \
+  HANDSFREE_SUMMARY_MODEL_BACKEND=llama.cpp \
   PYTHONPATH=src uv run python -m broker warm conductor --timeout 300
 ```
 
-`conductor_backend: "auto"` uses MLX for normal MLX/Hugging Face model IDs and
-uses Homebrew `llama-server` for a local `.gguf` file or a directory containing
-one `.gguf` file.
+`summary_model_backend: "auto"` and `conductor_backend: "auto"` use MLX for
+normal MLX/Hugging Face model IDs and Homebrew `llama-server` for a local
+`.gguf` file or a directory containing one `.gguf` file.
 
 ```bash
 export HANDSFREE_VOICE="af_heart:0.7,af_nicole:0.3"
@@ -294,9 +297,11 @@ You can use different `HANDSFREE_VOICE` values in different terminals for quick 
 
 Summary options:
 
-- `summary_backend: "mlx"`: default, resident local Qwen/MLX summarizer with deterministic fallback
+- `summary_backend: "mlx"`: default resident local summarizer with deterministic fallback
 - `summary_backend: "local"`: deterministic only, no model process
 - `summary_backend: "claude"`: legacy `claude -p` summarizer
+- `verbosity: "expanded"`: fuller document/research readouts; `detailed` remains the normal spoken update
+- `summary_model_backend: "auto"`: use MLX for MLX/Hugging Face model IDs and llama.cpp for local GGUF
 - Per-terminal override: `export HANDSFREE_SUMMARY_BACKEND=local`
 
 Interaction and TTS options:
@@ -333,7 +338,7 @@ hooks/
   install.py          # add/remove hooks in Claude settings
 src/
   listener.py         # unified input listener
-  summary_daemon.py   # resident MLX summarizer
+  summary_daemon.py   # resident local summarizer, MLX or GGUF via llama.cpp
   tts_daemon.py       # resident Kokoro/macOS speech daemon
   conductor_daemon.py # resident local LLM conductor daemon
   conductor_client.py # socket client for conductor chat/reset

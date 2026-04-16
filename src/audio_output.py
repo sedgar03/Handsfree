@@ -18,6 +18,7 @@ DEFAULT_SOUND_THEME = "aoe"
 MUTE_PATHS = {
     "claude": Path.home() / ".claude" / "mute",
     "codex": Path.home() / ".codex" / "mute",
+    "gemini": Path.home() / ".gemini" / "mute",
 }
 
 

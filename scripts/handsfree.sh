@@ -9,7 +9,7 @@
 #
 # Listener-only mode:
 #   Starts the input listener in the foreground and does not launch Claude Code
-#   or change the speech toggle. Use this with usage-hud-app as the control UI.
+#   or change the speech toggle. Use this with handsfree-hud as the control UI.
 #
 # Usage:
 #   ./scripts/handsfree.sh              # start with configured input mode

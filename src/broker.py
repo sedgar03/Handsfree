@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import time
 
 from audio_output import play_notification
-from config import is_handsfree_enabled, mark_consume_after, queue_consume_after_timestamp
+from config import mark_consume_after, queue_consume_after_timestamp, should_auto_speak_events
 from event_queue import enqueue_event, list_events, update_event_status
 from queue_actions import read_next_event, speak_event
 from service_control import (
@@ -59,7 +61,7 @@ def _cmd_enqueue(args: argparse.Namespace) -> int:
     if args.notify:
         play_notification(args.source)
 
-    if args.speak and is_handsfree_enabled():
+    if args.speak and should_auto_speak_events():
         speak_event(event)
         if args.complete_after_speak:
             update_event_status(event.id, "done")
@@ -189,6 +191,49 @@ def _cmd_conductor_reset(args: argparse.Namespace) -> int:
     return 0 if payload.get("ok") else 1
 
 
+def _cmd_conductor_watch(args: argparse.Namespace) -> int:
+    from conductor_transcript import ensure_transcript, format_transcript_record
+
+    path = ensure_transcript(args.conversation_id)
+
+    def render_line(line: str) -> None:
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            return
+        if isinstance(record, dict):
+            print(format_transcript_record(record), flush=True)
+
+    with path.open("r", encoding="utf-8") as handle:
+        existing = handle.readlines()
+        for line in existing[-max(0, args.lines) :]:
+            render_line(line)
+        if not args.follow:
+            return 0
+        handle.seek(0, os.SEEK_END)
+        while True:
+            line = handle.readline()
+            if line:
+                render_line(line)
+            else:
+                time.sleep(0.5)
+
+
+def _cmd_conductor_pane(args: argparse.Namespace) -> int:
+    from conductor_pane import open_conductor_pane
+
+    payload = open_conductor_pane(
+        conversation_id=args.conversation_id,
+        session=args.session,
+        window_name=args.window_name,
+        attach=args.attach,
+        print_only=args.print_command,
+        lines=args.lines,
+    )
+    print(json.dumps(payload, indent=2))
+    return 0 if payload.get("ok") else 1
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Handsfree queue broker")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -253,7 +298,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
     conductor_chat = conductor_sub.add_parser("chat", help="send a text turn")
     conductor_chat.add_argument("text", nargs="+")
-    conductor_chat.add_argument("--conversation-id", default="default")
+    conductor_chat.add_argument("--conversation-id", default="voice")
     conductor_chat.add_argument("--reset", action="store_true")
     conductor_chat.add_argument("--start-timeout", type=float, default=120.0)
     conductor_chat.add_argument("--timeout", type=float, default=120.0)
@@ -261,10 +306,36 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     conductor_chat.set_defaults(func=_cmd_conductor_chat)
 
     conductor_reset = conductor_sub.add_parser("reset", help="clear a conversation")
-    conductor_reset.add_argument("--conversation-id", default="default")
+    conductor_reset.add_argument("--conversation-id", default="voice")
     conductor_reset.add_argument("--start-timeout", type=float, default=120.0)
     conductor_reset.add_argument("--timeout", type=float, default=30.0)
     conductor_reset.set_defaults(func=_cmd_conductor_reset)
+
+    conductor_watch = conductor_sub.add_parser("watch", help="watch the conductor transcript")
+    conductor_watch.add_argument("--conversation-id", default="voice")
+    conductor_watch.add_argument("--lines", type=int, default=80)
+    conductor_watch.add_argument("--no-follow", dest="follow", action="store_false")
+    conductor_watch.set_defaults(func=_cmd_conductor_watch, follow=True)
+
+    conductor_pane = conductor_sub.add_parser(
+        "pane",
+        help="open or print a tmux conductor transcript window",
+    )
+    conductor_pane.add_argument("--conversation-id", default="voice")
+    conductor_pane.add_argument("--session")
+    conductor_pane.add_argument("--window-name", default="handsfree-conductor")
+    conductor_pane.add_argument("--lines", type=int, default=80)
+    conductor_pane.add_argument(
+        "--attach",
+        action="store_true",
+        help="attach to the target tmux session when outside tmux",
+    )
+    conductor_pane.add_argument(
+        "--print-command",
+        action="store_true",
+        help="print the tmux command without creating a window",
+    )
+    conductor_pane.set_defaults(func=_cmd_conductor_pane)
 
     return parser.parse_args(argv)
 

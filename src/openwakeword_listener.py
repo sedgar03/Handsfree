@@ -29,6 +29,32 @@ from event_queue import pending_count
 from wake_phrase_listener import SAMPLE_RATE, CHUNK_DURATION, CALIBRATION_DURATION, PRE_ROLL_SECONDS
 from wake_phrase_listener import _normalize, is_bare_queue_command, looks_like_hallucination
 
+_NOOP_COMMANDS = {
+    "clear throat",
+    "cough",
+    "gasp",
+    "groan",
+    "i",
+    "i am going to go",
+    "i'm sorry",
+    "i'm going to go",
+    "i'm gonna go",
+    "im sorry",
+    "im going to go",
+    "im gonna go",
+    "laugh",
+    "sorry",
+    "sigh",
+    "sniff",
+    "so",
+    "thank you",
+    "thanks",
+    "ok",
+    "okay",
+    "enjoy",
+    "you",
+}
+
 
 @dataclass(slots=True, frozen=True)
 class WakeDetection:
@@ -138,6 +164,23 @@ class OpenWakeWordListener:
             return get_config().get("interaction_mode") == "conductor"
         except Exception:
             return False
+
+    def _auto_queue_read_enabled(self) -> bool:
+        if not self.auto_read_queue:
+            return False
+        try:
+            config = get_config()
+        except Exception:
+            return True
+        if config.get("interaction_mode") != "conductor":
+            return True
+        return bool(config.get("conductor_auto_read_queue", False))
+
+    def _looks_like_noop_command(self, text: str) -> bool:
+        normalized = _normalize(text)
+        if normalized in _NOOP_COMMANDS:
+            return True
+        return normalized in {f"{phrase}." for phrase in _NOOP_COMMANDS}
 
     def _wake_suppressed(self) -> bool:
         return time.monotonic() < self._suppress_until
@@ -305,7 +348,7 @@ class OpenWakeWordListener:
             f"[oww] Wake detected: {detection.model} ({detection.score:.2f})",
             file=sys.stderr,
         )
-        if self.auto_read_queue and self._has_current_queue():
+        if self._auto_queue_read_enabled() and self._has_current_queue():
             self._read_queue(speak_empty=False)
             self._record_successful_wake()
             return
@@ -313,11 +356,12 @@ class OpenWakeWordListener:
         audio = self._capture_command()
         if audio is None:
             loop_guard_tripped = self._record_false_wake("no command heard")
-            if self.auto_read_queue and not loop_guard_tripped:
+            if self._auto_queue_read_enabled() and not loop_guard_tripped:
                 self._read_queue(speak_empty=True)
             return
         if self._handle_command_audio(audio):
             self._record_successful_wake()
+            self._suppress_wake_for(self.post_speech_cooldown)
         else:
             self._record_false_wake("ignored command")
 
@@ -431,14 +475,20 @@ class OpenWakeWordListener:
         had_wake_phrase, command_text = strip_wake_phrase(text, self.wake_models)
         if had_wake_phrase:
             if not command_text:
-                print("[oww] Heard wake phrase only; reading queue.", file=sys.stderr)
-                self._read_queue(speak_empty=True)
-                return True
+                if self._auto_queue_read_enabled():
+                    print("[oww] Heard wake phrase only; reading queue.", file=sys.stderr)
+                    self._read_queue(speak_empty=True)
+                    return True
+                print("[oww] Heard wake phrase only; ignoring.", file=sys.stderr)
+                return False
             print(f"[oww] Stripped wake phrase from command: {command_text}", file=sys.stderr)
             text = command_text
 
         if looks_like_hallucination(text, duration):
             print(f"[oww] Ignored likely hallucination: {text}", file=sys.stderr)
+            return False
+        if self._looks_like_noop_command(text):
+            print(f"[oww] Ignored no-op command: {text}", file=sys.stderr)
             return False
 
         print(f"[oww] Command transcript: {text}", file=sys.stderr)

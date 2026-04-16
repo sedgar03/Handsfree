@@ -27,3 +27,13 @@ def test_notification_sound_path_falls_back_to_legacy(monkeypatch, tmp_path):
     monkeypatch.setattr(audio_output, "DEFAULT_NOTIFICATION_SOUND", legacy)
 
     assert audio_output.notification_sound_path() == legacy
+
+
+def test_notifications_enabled_respects_gemini_mute(monkeypatch, tmp_path):
+    gemini_mute = tmp_path / "gemini-mute"
+    monkeypatch.setattr(audio_output, "MUTE_PATHS", {"gemini": gemini_mute})
+
+    assert audio_output.notifications_enabled("gemini") is True
+
+    gemini_mute.write_text("")
+    assert audio_output.notifications_enabled("gemini") is False

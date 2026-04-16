@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11,<3.12"
-# dependencies = ["kokoro-onnx", "sounddevice", "soundfile", "numpy", "chatterbox-tts>=0.1.7"]
+# dependencies = ["kokoro-onnx==0.4.9", "sounddevice", "soundfile", "numpy"]
 # [tool.uv.extra-build-dependencies]
 # pkuseg = ["numpy"]
 # ///
@@ -30,18 +30,26 @@ class TtsDaemon:
     def __init__(self) -> None:
         self.started_at = time.time()
         self.engine = "unknown"
+        self.details: dict[str, Any] = {}
 
     def load(self) -> None:
         write_service_status("tts", "starting")
         status = warm()
         self.engine = str(status.get("engine") or "unknown")
-        write_service_status("tts", "ready", engine=self.engine)
+        self.details = {
+            key: value
+            for key, value in status.items()
+            if key not in {"ok", "ready"} and value is not None
+        }
+        self.details["engine"] = self.engine
+        write_service_status("tts", "ready", **self.details)
 
     def status(self) -> dict[str, Any]:
         return {
             "ok": True,
             "state": "ready",
             "pid": os.getpid(),
+            **self.details,
             "engine": self.engine,
             "uptime_seconds": round(time.time() - self.started_at, 3),
         }
@@ -63,7 +71,10 @@ def _read_request(conn: socket.socket) -> dict[str, Any]:
 
 
 def _send_response(conn: socket.socket, payload: dict[str, Any]) -> None:
-    conn.sendall((json.dumps(payload) + "\n").encode("utf-8"))
+    try:
+        conn.sendall((json.dumps(payload) + "\n").encode("utf-8"))
+    except OSError:
+        return
 
 
 def _serve(daemon: TtsDaemon) -> None:
@@ -96,6 +107,7 @@ def _serve(daemon: TtsDaemon) -> None:
                 if command in {"ping", "status"}:
                     _send_response(conn, daemon.status())
                 elif command == "speak":
+                    write_service_status("tts", "active", **daemon.details)
                     engine = _speak_direct(
                         str(request.get("text") or ""),
                         voice=request.get("voice"),
@@ -103,11 +115,13 @@ def _serve(daemon: TtsDaemon) -> None:
                     )
                     if engine:
                         daemon.engine = str(engine)
-                        write_service_status("tts", "ready", engine=daemon.engine)
+                        daemon.details["engine"] = daemon.engine
+                        write_service_status("tts", "ready", **daemon.details)
                     _send_response(conn, {"ok": True})
                 else:
                     _send_response(conn, {"ok": False, "error": "unknown command"})
             except Exception as exc:  # noqa: BLE001
+                write_service_status("tts", "error", **daemon.details, error=str(exc))
                 _send_response(conn, {"ok": False, "error": str(exc)})
 
 

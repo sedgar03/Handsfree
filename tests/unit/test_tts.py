@@ -142,30 +142,82 @@ def test_speak_uses_chatterbox_when_selected(monkeypatch, tmp_path: Path):
     np.testing.assert_array_equal(samples, np.array([0.3, 0.4], dtype=np.float32))
 
 
-def test_chatterbox_auto_emotion_matches_text():
+def test_chatterbox_chunks_long_text_before_generation(monkeypatch, tmp_path: Path):
+    fake_chatterbox = FakeChatterbox()
+    play_calls = []
+
+    monkeypatch.setattr(tts, "LOCK_FILE", tmp_path / "tts.lock")
+    monkeypatch.setattr(tts, "CHATTERBOX_CHUNK_CHARS", 60)
+    monkeypatch.setattr(tts, "request_tts_daemon", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(tts, "_get_chatterbox", lambda *_args: fake_chatterbox)
+    monkeypatch.setattr(tts, "_chatterbox_conditioned_ref", None)
+    monkeypatch.setattr(
+        tts,
+        "_play_audio",
+        lambda samples, rate: play_calls.append((samples, rate)),
+    )
+    monkeypatch.setattr(
+        tts,
+        "get_config",
+        lambda: {
+            "tts_provider": "chatterbox",
+            "chatterbox_voice": "default",
+            "chatterbox_reference_audio": "",
+            "chatterbox_style": "auto",
+            "chatterbox_style_strength": 1.0,
+        },
+    )
+
+    tts.speak(
+        "First sentence stays short. Second sentence stays short. "
+        "Third sentence stays short."
+    )
+
+    assert fake_chatterbox.generated == [
+        "First sentence stays short. Second sentence stays short.",
+        "Third sentence stays short.",
+    ]
+    assert len(play_calls) == 1
+    samples, sample_rate = play_calls[0]
+    assert sample_rate == 22050
+    assert samples.shape[0] > 4
+
+
+def test_chatterbox_chunking_preserves_paragraphs_when_possible():
+    assert tts._split_chatterbox_chunks(
+        "First paragraph stays together. It has two sentences.\n\n"
+        "Second paragraph also stays together.",
+        max_chars=120,
+    ) == [
+        "First paragraph stays together. It has two sentences.",
+        "Second paragraph also stays together.",
+    ]
+
+
+def test_chatterbox_auto_preserves_plain_text_without_inserting_tags():
     assert (
         tts._chatterbox_tagged_text(
             "Sorry, I could not finish that.",
             {"chatterbox_style": "auto", "chatterbox_style_strength": 0.35},
         )
-        == "[sigh] Sorry, I could not finish that."
+        == "Sorry, I could not finish that."
     )
     assert (
         tts._chatterbox_tagged_text(
             "The tests passed. Everything is green.",
             {"chatterbox_style": "auto", "chatterbox_style_strength": 0.35},
         )
-        == "[happy] The tests passed. Everything is green."
+        == "The tests passed. Everything is green."
     )
 
 
-def test_chatterbox_auto_emotion_tiles_multiple_tags():
+def test_chatterbox_forced_emotion_tiles_multiple_tags():
     assert (
         tts._chatterbox_tagged_text(
             "Sorry, the tests failed. The fix is done.",
-            {"chatterbox_style": "auto", "chatterbox_style_strength": 1.0},
+            {"chatterbox_style": "sigh", "chatterbox_style_strength": 1.0},
         )
-        == "[sigh][dramatic] Sorry, the tests failed. [happy] The fix is done."
+        == "[sigh] Sorry, the tests failed. The fix is done."
     )
 
 
@@ -291,6 +343,41 @@ def test_speak_acquires_and_releases_file_lock(monkeypatch, tmp_path: Path):
     tts.speak("Lock behavior")
 
     assert flock_calls == [tts.fcntl.LOCK_EX, tts.fcntl.LOCK_UN]
+
+
+def test_play_audio_prefers_afplay_on_macos(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(tts.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        tts,
+        "_play_audio_with_afplay",
+        lambda samples, rate: calls.append((samples, rate)) or True,
+    )
+
+    tts._play_audio(np.array([0.1, 0.2], dtype=np.float32), 24000)
+
+    assert len(calls) == 1
+
+
+def test_play_audio_falls_back_to_sounddevice(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(tts.sys, "platform", "darwin")
+    monkeypatch.setattr(tts, "_play_audio_with_afplay", lambda *_args: False)
+    monkeypatch.setitem(
+        sys.modules,
+        "sounddevice",
+        types.SimpleNamespace(
+            play=lambda samples, samplerate: calls.append(("play", samples, samplerate)),
+            wait=lambda: calls.append(("wait",)),
+        ),
+    )
+
+    samples = np.array([0.1, 0.2], dtype=np.float32)
+    tts._play_audio(samples, 24000)
+
+    assert calls == [("play", samples, 24000), ("wait",)]
 
 
 def test_speak_uses_daemon_when_available(monkeypatch):

@@ -76,9 +76,10 @@ If `claude` is not on PATH, set:
 export HANDSFREE_CLAUDE_BIN="/absolute/path/to/claude"
 ```
 
-The default summarizer uses the resident local MLX daemon and falls back to the
-deterministic local summarizer when the daemon is not warm. `src/summarizer.py`
-uses `HANDSFREE_CLAUDE_BIN` only when `summary_backend` is set to `claude`.
+The default summarizer uses the resident local summary daemon and falls back to
+the deterministic local summarizer when the daemon is not warm. The daemon can
+load MLX models or local GGUF models through llama.cpp. `src/summarizer.py` uses
+`HANDSFREE_CLAUDE_BIN` only when `summary_backend` is set to `claude`.
 
 ## Manual JSON patch (if needed)
 

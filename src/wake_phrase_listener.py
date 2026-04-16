@@ -35,6 +35,11 @@ SAMPLE_RATE = 16000
 CHUNK_DURATION = 0.1
 CALIBRATION_DURATION = 0.5
 PRE_ROLL_SECONDS = 0.4
+_OBSERVED_NOISE_PREFIXES = (
+    "im going to go ahead and ",
+    "im going to go to the next video",
+    "im going to put it in the middle of ",
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -109,6 +114,20 @@ def is_bare_queue_command(text: str) -> bool:
     return _is_read_queue_command(text)
 
 
+def _has_repeated_phrase(words: list[str]) -> bool:
+    """Detect repeated Whisper filler phrases from ambient noise."""
+
+    upper = min(12, len(words) // 2)
+    for size in range(3, upper + 1):
+        grams = Counter(tuple(words[index : index + size]) for index in range(len(words) - size + 1))
+        if not grams:
+            continue
+        _, count = grams.most_common(1)[0]
+        if count >= 3 and (count * size) / len(words) >= 0.55:
+            return True
+    return False
+
+
 def looks_like_hallucination(text: str, duration: float) -> bool:
     """Filter common Whisper noise hallucinations before command handling."""
 
@@ -125,6 +144,10 @@ def looks_like_hallucination(text: str, duration: float) -> bool:
     if len(words) >= 8 and most_common_count / len(words) >= 0.55:
         return True
     if len(set(words)) <= 2 and len(words) >= 8:
+        return True
+    if len(words) >= 18 and _has_repeated_phrase(words):
+        return True
+    if any(normalized.startswith(prefix) for prefix in _OBSERVED_NOISE_PREFIXES):
         return True
     return False
 

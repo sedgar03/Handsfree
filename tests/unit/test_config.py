@@ -12,6 +12,8 @@ def test_get_config_defaults_when_file_missing(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(config, "CONFIG_PATH", config_path)
     monkeypatch.delenv("HANDSFREE_VOICE", raising=False)
     monkeypatch.delenv("HANDSFREE_SUMMARY_BACKEND", raising=False)
+    monkeypatch.delenv("HANDSFREE_SUMMARY_MODEL_BACKEND", raising=False)
+    monkeypatch.delenv("HANDSFREE_SUMMARY_MODEL", raising=False)
     monkeypatch.delenv("HANDSFREE_CONDUCTOR_BACKEND", raising=False)
     monkeypatch.delenv("HANDSFREE_CONDUCTOR_MODEL", raising=False)
 
@@ -20,12 +22,16 @@ def test_get_config_defaults_when_file_missing(monkeypatch, tmp_path: Path):
     assert cfg["input_mode"] == "media_key"
     assert cfg["verbosity"] == "detailed"
     assert cfg["summary_backend"] == "mlx"
+    assert cfg["summary_model_backend"] == "auto"
     assert cfg["summary_model"] == "mlx-community/Qwen3.5-2B-OptiQ-4bit"
+    assert cfg["summary_llama_server_bin"] == "llama-server"
+    assert cfg["summary_llama_port"] == 8091
     assert cfg["conductor_backend"] == "auto"
     assert cfg["conductor_model"] == "mlx-community/Qwen3.5-2B-OptiQ-4bit"
-    assert cfg["conductor_temperature"] == 0.3
+    assert cfg["conductor_temperature"] == 0.1
     assert cfg["conductor_max_tokens"] == 180
     assert cfg["conductor_history_turns"] == 8
+    assert cfg["conductor_transcript_enabled"] is True
     assert cfg["conductor_llama_server_bin"] == "llama-server"
     assert cfg["conductor_llama_port"] == 8091
     assert cfg["interaction_mode"] == "off"
@@ -43,6 +49,7 @@ def test_get_config_defaults_when_file_missing(monkeypatch, tmp_path: Path):
     assert cfg["wake_engine"] == "openwakeword"
     assert cfg["openwakeword_models"] == ["hey jarvis"]
     assert cfg["openwakeword_allow_freeform_commands"] is False
+    assert cfg["openwakeword_false_wake_disarm"] is False
     assert cfg["wake_allow_queue_without_prefix"] is True
 
 
@@ -62,6 +69,8 @@ def test_get_config_merges_custom_values_and_validates_input_mode(monkeypatch, t
     monkeypatch.setattr(config, "CONFIG_PATH", config_path)
     monkeypatch.delenv("HANDSFREE_VOICE", raising=False)
     monkeypatch.delenv("HANDSFREE_SUMMARY_BACKEND", raising=False)
+    monkeypatch.delenv("HANDSFREE_SUMMARY_MODEL_BACKEND", raising=False)
+    monkeypatch.delenv("HANDSFREE_SUMMARY_MODEL", raising=False)
     monkeypatch.delenv("HANDSFREE_CONDUCTOR_BACKEND", raising=False)
     monkeypatch.delenv("HANDSFREE_CONDUCTOR_MODEL", raising=False)
 
@@ -88,6 +97,10 @@ def test_get_config_merges_custom_values_and_validates_input_mode(monkeypatch, t
     config_path.write_text(json.dumps({"verbosity": "tiny"}))
     cfg_tiny = config.get_config()
     assert cfg_tiny["verbosity"] == "tiny"
+
+    config_path.write_text(json.dumps({"verbosity": "expanded"}))
+    cfg_expanded = config.get_config()
+    assert cfg_expanded["verbosity"] == "expanded"
 
     config_path.write_text(json.dumps({"verbosity": "not-real"}))
     cfg_invalid_verbosity = config.get_config()
@@ -122,6 +135,26 @@ def test_get_config_respects_env_summary_backend_override(monkeypatch, tmp_path:
     cfg = config.get_config()
 
     assert cfg["summary_backend"] == "claude"
+
+
+def test_get_config_respects_env_summary_model_overrides(monkeypatch, tmp_path: Path):
+    config_path = tmp_path / "voice-config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "summary_model_backend": "mlx",
+                "summary_model": "mlx-community/Qwen3.5-2B-OptiQ-4bit",
+            }
+        )
+    )
+    monkeypatch.setattr(config, "CONFIG_PATH", config_path)
+    monkeypatch.setenv("HANDSFREE_SUMMARY_MODEL_BACKEND", "llama.cpp")
+    monkeypatch.setenv("HANDSFREE_SUMMARY_MODEL", "models/local/model.gguf")
+
+    cfg = config.get_config()
+
+    assert cfg["summary_model_backend"] == "llama.cpp"
+    assert cfg["summary_model"] == "models/local/model.gguf"
 
 
 def test_get_config_respects_env_conductor_overrides(monkeypatch, tmp_path: Path):
@@ -175,6 +208,39 @@ def test_is_wake_enabled_reads_shared_toggle(monkeypatch, tmp_path: Path):
 
     toggle.write_text("")
     assert config.is_wake_enabled() is True
+
+
+def test_should_auto_speak_events_follows_speech_toggle_outside_conductor(monkeypatch):
+    states = []
+    monkeypatch.setattr(config, "is_handsfree_enabled", lambda: states[-1])
+    monkeypatch.setattr(config, "get_config", lambda: {"interaction_mode": "direct"})
+
+    states.append(False)
+    assert config.should_auto_speak_events() is False
+
+    states.append(True)
+    assert config.should_auto_speak_events() is True
+
+
+def test_should_auto_speak_events_defaults_off_in_conductor_mode(monkeypatch):
+    monkeypatch.setattr(config, "is_handsfree_enabled", lambda: True)
+    monkeypatch.setattr(config, "get_config", lambda: {"interaction_mode": "conductor"})
+
+    assert config.should_auto_speak_events() is False
+
+
+def test_should_auto_speak_events_can_opt_into_conductor_auto_speech(monkeypatch):
+    monkeypatch.setattr(config, "is_handsfree_enabled", lambda: True)
+    monkeypatch.setattr(
+        config,
+        "get_config",
+        lambda: {
+            "interaction_mode": "conductor",
+            "conductor_auto_speak_events": True,
+        },
+    )
+
+    assert config.should_auto_speak_events() is True
 
 
 def test_queue_consume_after_timestamp_uses_latest_control_marker(monkeypatch, tmp_path: Path):

@@ -33,7 +33,7 @@ _repo_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_repo_root / "src"))
 sys.path.insert(0, str(_repo_root / "hooks"))
 
-from config import is_handsfree_enabled, is_wake_enabled
+from config import is_handsfree_enabled, is_wake_enabled, should_auto_speak_events
 from shared import log as _log_shared
 
 _SPECIALIZED_HOOK_RECENCY = 60  # seconds — skip if a specialized hook spoke recently
@@ -232,7 +232,7 @@ def main():
                 session_id=session_id,
                 payload={"event": event_type},
             )
-            if speech_enabled:
+            if should_auto_speak_events():
                 speak_event(event)
                 try:
                     from event_queue import update_event_status

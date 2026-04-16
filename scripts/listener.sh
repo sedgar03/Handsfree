@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Foreground Handsfree listener for use with usage-hud-app.
+# Foreground Handsfree listener for use with handsfree-hud.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

@@ -27,10 +27,15 @@ from config import (
     TTS_PID,
     TTS_SOCKET,
     WAKE_TOGGLE,
+    get_config,
     is_handsfree_enabled,
     is_wake_enabled,
     mark_consume_after,
 )
+from llama_cpp_server import normalize_model_backend
+
+
+VALID_TTS_PROVIDERS = {"kokoro", "chatterbox"}
 
 
 def _uv_bin() -> str:
@@ -160,6 +165,125 @@ def _wait_for_status(name: str, timeout: float, *, state: str = "ready") -> dict
     raise TimeoutError(f"{name} did not become {state}: {last}")
 
 
+def _desired_summary_identity() -> tuple[str, str]:
+    config = get_config()
+    model = str(config.get("summary_model") or "mlx-community/Qwen3.5-2B-OptiQ-4bit")
+    backend = normalize_model_backend(
+        config.get("summary_model_backend"),
+        model,
+        REPO_ROOT,
+    )
+    return backend, model
+
+
+def _desired_conductor_identity() -> tuple[str, str]:
+    config = get_config()
+    model = str(config.get("conductor_model") or "mlx-community/Qwen3.5-2B-OptiQ-4bit")
+    backend = normalize_model_backend(
+        config.get("conductor_backend"),
+        model,
+        REPO_ROOT,
+    )
+    return backend, model
+
+
+def _desired_tts_engine() -> str:
+    provider = get_config().get("tts_provider")
+    if isinstance(provider, str) and provider in VALID_TTS_PROVIDERS:
+        return provider
+    return "kokoro"
+
+
+def _tts_daemon_script() -> Path:
+    if _desired_tts_engine() == "chatterbox":
+        return REPO_ROOT / "src" / "tts_chatterbox_daemon.py"
+    return REPO_ROOT / "src" / "tts_daemon.py"
+
+
+def _annotate_summary_status(payload: dict[str, Any]) -> dict[str, Any]:
+    backend, model = _desired_summary_identity()
+    desired_tts_provider = _desired_tts_engine()
+    annotated = dict(payload)
+    annotated["desired_backend"] = backend
+    annotated["desired_model"] = model
+    annotated["desired_prompt_tts_provider"] = desired_tts_provider
+    actual_backend = annotated.get("backend")
+    actual_model = annotated.get("model")
+    actual_tts_provider = annotated.get("prompt_tts_provider")
+    stale = (
+        annotated.get("state") == "ready"
+        and (
+            (actual_backend is not None and actual_backend != backend)
+            or (actual_model is not None and actual_model != model)
+            or actual_tts_provider != desired_tts_provider
+        )
+    )
+    annotated["stale"] = bool(stale)
+    return annotated
+
+
+def _annotate_conductor_status(payload: dict[str, Any]) -> dict[str, Any]:
+    backend, model = _desired_conductor_identity()
+    annotated = dict(payload)
+    annotated["desired_backend"] = backend
+    annotated["desired_model"] = model
+    actual_backend = annotated.get("backend")
+    actual_model = annotated.get("model")
+    stale = (
+        annotated.get("state") == "ready"
+        and (
+            (actual_backend is not None and actual_backend != backend)
+            or (actual_model is not None and actual_model != model)
+        )
+    )
+
+    status = read_service_status("conductor")
+    if status.get("state") == "error" and status.get("pid") == annotated.get("pid"):
+        annotated["ok"] = False
+        annotated["state"] = "error"
+        if status.get("error"):
+            annotated["error"] = status["error"]
+
+    annotated["stale"] = bool(stale)
+    return annotated
+
+
+def _annotate_tts_status(payload: dict[str, Any]) -> dict[str, Any]:
+    desired = _desired_tts_engine()
+    annotated = dict(payload)
+    annotated["desired_engine"] = desired
+    engine = annotated.get("engine")
+    requested = annotated.get("requested_engine")
+    fallback = bool(annotated.get("fallback_reason"))
+    stale = False
+    if annotated.get("state") == "ready":
+        if isinstance(requested, str):
+            stale = requested != desired
+        elif isinstance(engine, str):
+            stale = engine != desired
+        fallback = fallback or (requested == desired and engine != desired)
+    annotated["fallback"] = bool(fallback)
+    annotated["stale"] = bool(stale)
+    return annotated
+
+
+def _status_without_ping(name: str, pid_path: Path) -> dict[str, Any]:
+    pid = _read_pid(pid_path)
+    running = _pid_is_running(pid)
+    status = read_service_status(name)
+    state = status.get("state")
+    if running and state in {"ready", "active", "starting", "error"}:
+        payload = dict(status)
+        payload["pid"] = pid
+        payload["ok"] = state in {"ready", "active"}
+        return payload
+    return {
+        "ok": False,
+        "state": "starting" if running else "stopped",
+        "pid": pid,
+    }
+
+
 def _start_uv_script(
     script: Path,
     *,
@@ -193,7 +317,10 @@ def _start_uv_script(
 def start_summary_daemon(*, wait: bool = True, timeout: float = 90.0) -> dict[str, Any]:
     ready = _ping_socket(SUMMARY_SOCKET)
     if ready is not None:
-        return ready
+        ready = _annotate_summary_status(ready)
+        if not ready.get("stale"):
+            return ready
+        stop_pid(SUMMARY_PID, name="summary")
     _start_uv_script(
         REPO_ROOT / "src" / "summary_daemon.py",
         pid_path=SUMMARY_PID,
@@ -201,27 +328,33 @@ def start_summary_daemon(*, wait: bool = True, timeout: float = 90.0) -> dict[st
     )
     if not wait:
         return {"ok": True, "state": "starting"}
-    return _wait_for_socket(SUMMARY_SOCKET, timeout)
+    return _annotate_summary_status(_wait_for_socket(SUMMARY_SOCKET, timeout))
 
 
 def start_tts_daemon(*, wait: bool = True, timeout: float = 30.0) -> dict[str, Any]:
     ready = _ping_socket(TTS_SOCKET)
     if ready is not None:
-        return ready
+        ready = _annotate_tts_status(ready)
+        if not ready.get("stale"):
+            return ready
+        stop_pid(TTS_PID, name="tts")
     _start_uv_script(
-        REPO_ROOT / "src" / "tts_daemon.py",
+        _tts_daemon_script(),
         pid_path=TTS_PID,
         log_name="tts-daemon.log",
     )
     if not wait:
         return {"ok": True, "state": "starting"}
-    return _wait_for_socket(TTS_SOCKET, timeout)
+    return _annotate_tts_status(_wait_for_socket(TTS_SOCKET, timeout))
 
 
 def start_conductor_daemon(*, wait: bool = True, timeout: float = 90.0) -> dict[str, Any]:
     ready = _ping_socket(CONDUCTOR_SOCKET)
     if ready is not None:
-        return ready
+        ready = _annotate_conductor_status(ready)
+        if ready.get("ok") and not ready.get("stale"):
+            return ready
+        stop_pid(CONDUCTOR_PID, name="conductor")
     _start_uv_script(
         REPO_ROOT / "src" / "conductor_daemon.py",
         pid_path=CONDUCTOR_PID,
@@ -229,7 +362,7 @@ def start_conductor_daemon(*, wait: bool = True, timeout: float = 90.0) -> dict[
     )
     if not wait:
         return {"ok": True, "state": "starting"}
-    return _wait_for_socket(CONDUCTOR_SOCKET, timeout)
+    return _annotate_conductor_status(_wait_for_socket(CONDUCTOR_SOCKET, timeout))
 
 
 def _pgrep_listener() -> int | None:
@@ -309,6 +442,22 @@ def stop_conductor_daemon() -> dict[str, Any]:
     return {"ok": True, "stopped": stopped}
 
 
+def _stop_voice_stack_if_idle() -> dict[str, bool]:
+    """Stop warm voice/model services once speech and wake are both disabled."""
+
+    if is_handsfree_enabled() or is_wake_enabled():
+        return {
+            "summary_stopped": False,
+            "tts_stopped": False,
+            "conductor_stopped": False,
+        }
+    return {
+        "summary_stopped": stop_pid(SUMMARY_PID, name="summary"),
+        "tts_stopped": stop_pid(TTS_PID, name="tts"),
+        "conductor_stopped": stop_pid(CONDUCTOR_PID, name="conductor"),
+    }
+
+
 def enable_speech(*, timeout: float = 120.0) -> dict[str, Any]:
     warmed = warm_speech(timeout=timeout)
     HANDSFREE_TOGGLE.parent.mkdir(parents=True, exist_ok=True)
@@ -320,15 +469,12 @@ def enable_speech(*, timeout: float = 120.0) -> dict[str, Any]:
 def disable_speech() -> dict[str, Any]:
     for path in (HANDSFREE_TOGGLE, LEGACY_HANDSFREE_TOGGLE):
         path.unlink(missing_ok=True)
-    keep_reader_warm = is_wake_enabled()
-    summary_stopped = False if keep_reader_warm else stop_pid(SUMMARY_PID, name="summary")
-    tts_stopped = False if keep_reader_warm else stop_pid(TTS_PID, name="tts")
+    stopped = _stop_voice_stack_if_idle()
     return {
         "ok": True,
         "enabled": False,
-        "kept_reader_warm": keep_reader_warm,
-        "summary_stopped": summary_stopped,
-        "tts_stopped": tts_stopped,
+        "kept_reader_warm": is_wake_enabled(),
+        **stopped,
     }
 
 
@@ -357,7 +503,13 @@ def disable_wake() -> dict[str, Any]:
     WAKE_TOGGLE.unlink(missing_ok=True)
     listener_stopped = stop_pid(LISTENER_PID, name="listener")
     write_service_status("stt", "stopped")
-    return {"ok": True, "enabled": False, "listener_stopped": listener_stopped}
+    stopped = _stop_voice_stack_if_idle()
+    return {
+        "ok": True,
+        "enabled": False,
+        "listener_stopped": listener_stopped,
+        **stopped,
+    }
 
 
 def service_status() -> dict[str, Any]:
@@ -369,26 +521,15 @@ def service_status() -> dict[str, Any]:
     return {
         "speech_enabled": is_handsfree_enabled(),
         "wake_enabled": is_wake_enabled(),
-        "summary": summary_ping
-        or {
-            "ok": False,
-            "state": "starting" if _pid_is_running(_read_pid(SUMMARY_PID)) else "stopped",
-            "pid": _read_pid(SUMMARY_PID),
-        },
-        "tts": tts_ping
-        or {
-            "ok": False,
-            "state": "starting" if _pid_is_running(_read_pid(TTS_PID)) else "stopped",
-            "pid": _read_pid(TTS_PID),
-        },
-        "conductor": conductor_ping
-        or {
-            "ok": False,
-            "state": "starting"
-            if _pid_is_running(_read_pid(CONDUCTOR_PID))
-            else "stopped",
-            "pid": _read_pid(CONDUCTOR_PID),
-        },
+        "summary": _annotate_summary_status(summary_ping)
+        if summary_ping
+        else _annotate_summary_status(_status_without_ping("summary", SUMMARY_PID)),
+        "tts": _annotate_tts_status(tts_ping)
+        if tts_ping
+        else _annotate_tts_status(_status_without_ping("tts", TTS_PID)),
+        "conductor": _annotate_conductor_status(conductor_ping)
+        if conductor_ping
+        else _annotate_conductor_status(_status_without_ping("conductor", CONDUCTOR_PID)),
         "listener": {
             "ok": bool(_pid_is_running(listener_pid)),
             "state": "running" if _pid_is_running(listener_pid) else "stopped",

@@ -9,14 +9,149 @@ import summary_daemon
 import summarizer
 
 
-def test_voice_prompts_allow_chatterbox_tags_with_guardrails():
-    for prompt in (*summarizer.PROMPTS.values(), summary_daemon.SYSTEM_PROMPT):
-        assert "[laugh]" in prompt
-        assert "[sigh]" in prompt
-        assert "Do not invent tags" in prompt
+def test_summary_prompt_adds_chatterbox_guidance_only_for_chatterbox(monkeypatch):
+    monkeypatch.setattr(summary_daemon, "get_config", lambda: {"tts_provider": "kokoro"})
+    kokoro_prompt = summary_daemon.load_summary_system_prompt()
+    assert "[laugh]" not in kokoro_prompt
+    assert "Do not invent tags" not in kokoro_prompt
+
+    monkeypatch.setattr(summary_daemon, "get_config", lambda: {"tts_provider": "chatterbox"})
+    chatterbox_prompt = summary_daemon.load_summary_system_prompt()
+    assert "[laugh]" in chatterbox_prompt
+    assert "[sigh]" in chatterbox_prompt
+    assert "Do not invent tags" in chatterbox_prompt
 
 
-@pytest.mark.parametrize("verbosity", ["tiny", "terse", "detailed"])
+def test_legacy_claude_prompt_adds_chatterbox_guidance_only_for_chatterbox(monkeypatch):
+    monkeypatch.setattr(summarizer, "get_config", lambda: {"tts_provider": "kokoro"})
+    kokoro_prompt = summarizer._prompt_for_verbosity("detailed")
+    assert "[laugh]" not in kokoro_prompt
+    assert "Do not invent tags" not in kokoro_prompt
+
+    monkeypatch.setattr(summarizer, "get_config", lambda: {"tts_provider": "chatterbox"})
+    chatterbox_prompt = summarizer._prompt_for_verbosity("detailed")
+    assert "[laugh]" in chatterbox_prompt
+    assert "[sigh]" in chatterbox_prompt
+    assert "Do not invent tags" in chatterbox_prompt
+
+
+def test_summary_daemon_auto_selects_llama_cpp_for_gguf_directory(monkeypatch, tmp_path):
+    model_dir = tmp_path / "supergemma"
+    model_dir.mkdir()
+    model_path = model_dir / "supergemma.gguf"
+    model_path.write_bytes(b"")
+
+    monkeypatch.setattr(
+        summary_daemon,
+        "get_config",
+        lambda: {
+            "summary_model_backend": "auto",
+            "summary_model": str(model_dir),
+        },
+    )
+
+    daemon = summary_daemon.SummaryDaemon()
+
+    assert daemon.backend == "llama.cpp"
+    assert daemon.llama.model_path() == model_path.resolve()
+
+
+def test_summary_daemon_llama_cpp_summarize_uses_summary_prompt(monkeypatch, tmp_path):
+    model_path = tmp_path / "supergemma.gguf"
+    model_path.write_bytes(b"")
+    calls = []
+
+    monkeypatch.setattr(
+        summary_daemon,
+        "get_config",
+        lambda: {
+            "summary_model_backend": "llama.cpp",
+            "summary_model": str(model_path),
+            "summary_llama_host": "127.0.0.1",
+            "summary_llama_port": 8099,
+            "summary_llama_chat_timeout": 30.0,
+        },
+    )
+    daemon = summary_daemon.SummaryDaemon()
+    monkeypatch.setattr(
+        daemon.llama,
+        "chat",
+        lambda messages, **kwargs: calls.append((messages, kwargs)) or "Tests passed.",
+    )
+
+    result = daemon.summarize("Updated code and tests passed.", mode="status", verbosity="terse")
+
+    assert result == "Tests passed."
+    messages, kwargs = calls[0]
+    assert kwargs == {"temperature": 0.0, "max_tokens": 32}
+    assert messages[0] == {
+        "role": "system",
+        "content": summary_daemon.load_summary_system_prompt(),
+    }
+    assert "VERBOSITY: terse" in messages[1]["content"]
+    assert "Updated code and tests passed." in messages[1]["content"]
+
+
+def test_summary_daemon_detailed_summary_allows_one_hundred_eighty_tokens(monkeypatch, tmp_path):
+    model_path = tmp_path / "supergemma.gguf"
+    model_path.write_bytes(b"")
+    calls = []
+
+    monkeypatch.setattr(
+        summary_daemon,
+        "get_config",
+        lambda: {
+            "summary_model_backend": "llama.cpp",
+            "summary_model": str(model_path),
+            "summary_llama_host": "127.0.0.1",
+            "summary_llama_port": 8099,
+            "summary_llama_chat_timeout": 30.0,
+        },
+    )
+    daemon = summary_daemon.SummaryDaemon()
+    monkeypatch.setattr(
+        daemon.llama,
+        "chat",
+        lambda messages, **kwargs: calls.append((messages, kwargs)) or "Detailed summary.",
+    )
+
+    result = daemon.summarize("A longer update.", mode="status", verbosity="detailed")
+
+    assert result == "Detailed summary."
+    assert calls[0][1]["max_tokens"] == 180
+
+
+def test_summary_daemon_expanded_summary_allows_three_hundred_twenty_tokens(monkeypatch, tmp_path):
+    model_path = tmp_path / "supergemma.gguf"
+    model_path.write_bytes(b"")
+    calls = []
+
+    monkeypatch.setattr(
+        summary_daemon,
+        "get_config",
+        lambda: {
+            "summary_model_backend": "llama.cpp",
+            "summary_model": str(model_path),
+            "summary_llama_host": "127.0.0.1",
+            "summary_llama_port": 8099,
+            "summary_llama_chat_timeout": 30.0,
+        },
+    )
+    daemon = summary_daemon.SummaryDaemon()
+    monkeypatch.setattr(
+        daemon.llama,
+        "chat",
+        lambda messages, **kwargs: calls.append((messages, kwargs)) or "Expanded summary.",
+    )
+
+    result = daemon.summarize("A longer document update.", mode="status", verbosity="expanded")
+
+    assert result == "Expanded summary."
+    assert calls[0][1]["max_tokens"] == 320
+    assert "VERBOSITY: expanded" in calls[0][0][1]["content"]
+
+
+@pytest.mark.parametrize("verbosity", ["tiny", "terse", "detailed", "expanded"])
 def test_summarize_claude_backend_uses_expected_prompt(monkeypatch, verbosity: str):
     calls = []
 
@@ -35,13 +170,18 @@ def test_summarize_claude_backend_uses_expected_prompt(monkeypatch, verbosity: s
 
     monkeypatch.setattr(summarizer, "_resolve_claude_bin", lambda: "/usr/local/bin/claude")
     monkeypatch.setattr(summarizer.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        summarizer,
+        "get_config",
+        lambda: {"tts_provider": "chatterbox"},
+    )
 
     result = summarizer.summarize("Module update", verbosity=verbosity, backend="claude")
 
     assert result == "concise summary"
     assert len(calls) == 1
     assert calls[0]["cmd"] == ["/usr/local/bin/claude", "-p", "-"]
-    assert calls[0]["input"].startswith(summarizer.PROMPTS[verbosity])
+    assert calls[0]["input"].startswith(summarizer._prompt_for_verbosity(verbosity))
     assert "Module update" in calls[0]["input"]
     assert calls[0]["env"]["HANDSFREE_ACTIVE"] == "1"
 
@@ -184,7 +324,44 @@ def test_summarize_local_tiny_is_heavily_capped():
 
     assert result.startswith("No input needed.")
     assert "I also updated" not in result
-    assert len(result) <= 140
+    assert len(result) <= 180
+
+
+def test_summarize_local_expanded_keeps_more_context():
+    result = summarizer.summarize_local(
+        "The first document argues for a local conductor harness. "
+        "The second document says the transcript pane is important for trust. "
+        "The third document recommends expanded summaries for research mode. "
+        "The fourth document warns that normal speech updates should stay short. "
+        "The fifth document is less relevant.",
+        verbosity="expanded",
+    )
+
+    assert result.startswith("No input needed.")
+    assert "local conductor harness" in result
+    assert "transcript pane" in result
+    assert "expanded summaries" in result
+    assert "normal speech updates" in result
+    assert "less relevant" not in result
+    assert len(result) <= 1600
+
+
+def test_summarize_local_does_not_read_markdown_table_as_input_request():
+    result = summarizer.summarize_local(
+        "The decision rule should be pragmatic:\n\n"
+        "| Outcome | Interpretation | Next Step |\n"
+        "|---|---|---|\n"
+        "| Prompt helps | It was under-specified | Lock prompt |\n"
+        "| Prompt barely helps | Decision boundary is learned | Retrain |\n\n"
+        "So yes, the question is exactly: what is the best prompted starting point "
+        "before we spend another training run?\n\n"
+        "My recommendation: run a small prompt-ablation benchmark next.",
+        verbosity="detailed",
+    )
+
+    assert result.startswith("No input needed.")
+    assert "I need your input" not in result
+    assert "|" not in result
 
 
 def test_summarize_falls_back_when_claude_binary_missing(monkeypatch):
@@ -222,7 +399,11 @@ def test_summarize_uses_config_backend_and_verbosity_when_unspecified(monkeypatc
     monkeypatch.setattr(
         summarizer,
         "get_config",
-        lambda: {"verbosity": "terse", "summary_backend": "claude"},
+        lambda: {
+            "verbosity": "terse",
+            "summary_backend": "claude",
+            "tts_provider": "kokoro",
+        },
     )
     monkeypatch.setattr(summarizer, "_resolve_claude_bin", lambda: "/usr/local/bin/claude")
     monkeypatch.setattr(summarizer.subprocess, "run", fake_run)
@@ -230,4 +411,38 @@ def test_summarize_uses_config_backend_and_verbosity_when_unspecified(monkeypatc
     result = summarizer.summarize("Use config verbosity", verbosity=None)
 
     assert result == "from-config"
-    assert calls[0]["input"].startswith(summarizer.PROMPTS["terse"])
+    assert calls[0]["input"].startswith(summarizer._prompt_for_verbosity("terse"))
+
+
+def test_summarize_strips_speech_tags_for_non_chatterbox(monkeypatch):
+    monkeypatch.setattr(
+        summarizer,
+        "get_config",
+        lambda: {"verbosity": "detailed", "summary_backend": "local", "tts_provider": "kokoro"},
+    )
+
+    result = summarizer.summarize(
+        "[dramatic] Updated the prompt. [think] Hidden planning should not be read.",
+        verbosity="direct",
+    )
+
+    assert result == "Updated the prompt. Hidden planning should not be read."
+
+
+def test_summarize_preserves_limited_valid_tags_for_chatterbox(monkeypatch):
+    monkeypatch.setattr(
+        summarizer,
+        "get_config",
+        lambda: {
+            "verbosity": "direct",
+            "summary_backend": "local",
+            "tts_provider": "chatterbox",
+        },
+    )
+
+    result = summarizer.summarize(
+        "[dramatic] Updated the prompt. [think] Hidden planning is stripped. [happy] Tests passed.",
+        verbosity="direct",
+    )
+
+    assert result == "[dramatic] Updated the prompt. Hidden planning is stripped. [happy] Tests passed."

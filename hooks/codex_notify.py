@@ -15,7 +15,7 @@ sys.path.insert(0, str(_repo_root / "src"))
 sys.path.insert(0, str(_repo_root / "hooks"))
 
 from audio_output import play_notification
-from config import is_handsfree_enabled, is_wake_enabled
+from config import is_wake_enabled, should_auto_speak_events
 from event_queue import enqueue_event, update_event_status
 from queue_actions import speak_event
 from shared import log as _log_shared
@@ -177,7 +177,7 @@ def main() -> int:
     # Notification and speech are independent controls. Notification sound
     # follows ~/.codex/mute; automatic speech follows ~/.handsfree/speech-enabled.
     play_notification("codex")
-    if is_handsfree_enabled():
+    if should_auto_speak_events():
         if speak_event(event):
             update_event_status(event.id, "done")
             _log(f"Spoke event {event.id}")

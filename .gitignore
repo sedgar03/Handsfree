@@ -6,6 +6,9 @@ data/*
 results/*
 !results/.gitkeep
 
+# Generated audio/output samples
+outputs/
+
 # Research data files
 research/literature/*
 !research/literature/.gitkeep

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import json
 import sys
 import types
 
 import conductor_daemon
+import llama_cpp_server
 
 
 def _mlx_config() -> dict:
@@ -14,20 +14,48 @@ def _mlx_config() -> dict:
         "conductor_temperature": 0.3,
         "conductor_max_tokens": 180,
         "conductor_history_turns": 8,
+        "conductor_tool_max_rounds": 1,
+        "conductor_transcript_enabled": False,
     }
 
 
-def test_conductor_prompt_allows_chatterbox_tags_with_guardrails():
-    assert "[laugh]" in conductor_daemon.SYSTEM_PROMPT
-    assert "[dramatic]" in conductor_daemon.SYSTEM_PROMPT
-    assert "Do not invent tags" in conductor_daemon.SYSTEM_PROMPT
-    assert "host-provided context snapshots" in conductor_daemon.SYSTEM_PROMPT
+def test_conductor_prompt_adds_chatterbox_guidance_only_for_chatterbox(monkeypatch):
+    monkeypatch.setattr(conductor_daemon, "get_config", lambda: {"tts_provider": "kokoro"})
+    kokoro_prompt = conductor_daemon.load_conductor_system_prompt()
+    assert "[laugh]" not in kokoro_prompt
+    assert "Do not invent tags" not in kokoro_prompt
+    assert "read-only tools" in kokoro_prompt
+    assert "Controlled pane tools" in kokoro_prompt
+    assert "list_panes" in kokoro_prompt
+    assert "send_text_to_pane" in kokoro_prompt
+    assert "Only answer the user's current request" in kokoro_prompt
+    assert "use the tmux tools" in kokoro_prompt
+    assert "Do not use markdown" in kokoro_prompt
+
+    monkeypatch.setattr(conductor_daemon, "get_config", lambda: {"tts_provider": "chatterbox"})
+    chatterbox_prompt = conductor_daemon.load_conductor_system_prompt()
+    assert "[laugh]" in chatterbox_prompt
+    assert "[dramatic]" in chatterbox_prompt
+    assert "Do not invent tags" in chatterbox_prompt
 
 
 def test_strip_thinking_markup_removes_hidden_reasoning():
     text = "Before. <think>private chain</think> After."
 
     assert conductor_daemon._strip_thinking_markup(text) == "Before.  After."
+
+
+def test_parse_tool_call_accepts_plain_and_fenced_json():
+    assert conductor_daemon._parse_tool_call('{"tool":"list_panes","args":{}}') == {
+        "name": "list_panes",
+        "args": {},
+    }
+    assert conductor_daemon._parse_tool_call(
+        '```json\n{"tool_call":{"name":"read_pane","arguments":{"pane_id":"%3"}}}\n```'
+    ) == {
+        "name": "read_pane",
+        "args": {"pane_id": "%3"},
+    }
 
 
 def test_conductor_history_is_bounded(monkeypatch):
@@ -60,6 +88,102 @@ def test_conductor_history_is_bounded(monkeypatch):
     assert history[0] == {"role": "user", "content": "turn 2"}
 
 
+def test_conductor_chat_writes_transcript_when_enabled(monkeypatch):
+    monkeypatch.setattr(
+        conductor_daemon,
+        "get_config",
+        lambda: {
+            **_mlx_config(),
+            "conductor_transcript_enabled": True,
+        },
+    )
+    events = []
+    monkeypatch.setattr(
+        conductor_daemon,
+        "append_transcript_event",
+        lambda conversation_id, event_type, text="": events.append(
+            (conversation_id, event_type, text)
+        ),
+    )
+    daemon = conductor_daemon.ConductorDaemon()
+    daemon.model = object()
+    daemon.tokenizer = object()
+    daemon.sampler = object()
+    monkeypatch.setattr(daemon, "_apply_chat_template", lambda _messages: "prompt")
+    monkeypatch.setattr(conductor_daemon, "_strip_thinking_markup", lambda text: text)
+
+    fake_mlx_lm = types.ModuleType("mlx_lm")
+    fake_mlx_lm.generate = lambda *_args, **_kwargs: "response"
+    monkeypatch.setitem(sys.modules, "mlx_lm", fake_mlx_lm)
+
+    daemon.chat("help me plan", conversation_id="voice")
+
+    assert events == [
+        ("voice", "user", "help me plan"),
+        ("voice", "assistant", "response"),
+    ]
+
+
+def test_conductor_executes_tool_call_then_answers(monkeypatch):
+    monkeypatch.setattr(
+        conductor_daemon,
+        "get_config",
+        lambda: {
+            **_mlx_config(),
+            "conductor_transcript_enabled": True,
+        },
+    )
+    transcript_events = []
+    monkeypatch.setattr(
+        conductor_daemon,
+        "append_transcript_event",
+        lambda conversation_id, event_type, **kwargs: transcript_events.append(
+            (conversation_id, event_type, kwargs)
+        ),
+    )
+    tool_calls = []
+    monkeypatch.setattr(
+        conductor_daemon,
+        "execute_tool",
+        lambda name, args: tool_calls.append((name, args))
+        or {
+            "ok": True,
+            "panes": [{"pane_id": "%3", "window": "work"}],
+            "summary": "%3: work",
+        },
+    )
+
+    daemon = conductor_daemon.ConductorDaemon()
+    daemon.model = object()
+    daemon.tokenizer = object()
+    daemon.sampler = object()
+    responses = iter(
+        [
+            '{"tool":"list_panes","args":{}}',
+            "I see one tmux pane: work.",
+        ]
+    )
+    calls = []
+
+    def fake_complete(messages):
+        calls.append(list(messages))
+        return next(responses)
+
+    monkeypatch.setattr(daemon, "_complete_chat", fake_complete)
+
+    response = daemon.chat("what tmux panes are open?", conversation_id="voice")
+
+    assert response == "I see one tmux pane: work."
+    assert tool_calls == [("list_panes", {})]
+    assert "Tool result for list_panes" in calls[1][-1]["content"]
+    assert daemon.histories["voice"][-1] == {
+        "role": "assistant",
+        "content": "I see one tmux pane: work.",
+    }
+    assert [event[1] for event in transcript_events] == ["user", "tool", "assistant"]
+    assert transcript_events[1][2]["data"]["name"] == "list_panes"
+
+
 def test_conductor_auto_selects_llama_cpp_for_gguf_directory(monkeypatch, tmp_path):
     model_dir = tmp_path / "supergemma"
     model_dir.mkdir()
@@ -78,14 +202,13 @@ def test_conductor_auto_selects_llama_cpp_for_gguf_directory(monkeypatch, tmp_pa
     daemon = conductor_daemon.ConductorDaemon()
 
     assert daemon.backend == "llama.cpp"
-    assert daemon._resolve_llama_model_path() == model_path.resolve()
+    assert daemon.llama.model_path() == model_path.resolve()
 
 
 def test_llama_cpp_load_starts_server(monkeypatch, tmp_path):
     model_path = tmp_path / "supergemma.gguf"
     model_path.write_bytes(b"")
     statuses = []
-    popen_calls = []
 
     monkeypatch.setattr(
         conductor_daemon,
@@ -109,38 +232,27 @@ def test_llama_cpp_load_starts_server(monkeypatch, tmp_path):
         lambda *args, **kwargs: statuses.append((args, kwargs)),
     )
 
-    class FakeProcess:
-        returncode = None
-
-        def poll(self):
-            return None
-
-    def fake_popen(command, **kwargs):
-        popen_calls.append((command, kwargs))
-        return FakeProcess()
-
     daemon = conductor_daemon.ConductorDaemon()
-    monkeypatch.setattr(daemon, "_llama_health", lambda timeout: False)
-    monkeypatch.setattr(daemon, "_wait_for_llama_server", lambda: None)
-    monkeypatch.setattr(conductor_daemon.shutil, "which", lambda _name: None)
-    monkeypatch.setattr(conductor_daemon.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(llama_cpp_server.shutil, "which", lambda _name: None)
+    starts = []
+    monkeypatch.setattr(daemon.llama, "start", lambda: starts.append(True))
 
     daemon.load()
 
-    command, kwargs = popen_calls[0]
+    command = daemon._llama_server_command()
     assert command[:3] == ["llama-server", "--model", str(model_path.resolve())]
     assert "--no-webui" in command
     assert "--log-disable" in command
-    assert kwargs["cwd"] == str(conductor_daemon.REPO_ROOT)
+    assert starts == [True]
     assert daemon.llama_ready is True
     assert statuses[-1][0][:2] == ("conductor", "ready")
     assert statuses[-1][1]["backend"] == "llama.cpp"
 
 
-def test_llama_cpp_chat_uses_openai_compatible_endpoint(monkeypatch, tmp_path):
+def test_conductor_llama_cpp_chat_uses_shared_client(monkeypatch, tmp_path):
     model_path = tmp_path / "supergemma.gguf"
     model_path.write_bytes(b"")
-    requests = []
+    calls = []
 
     monkeypatch.setattr(
         conductor_daemon,
@@ -151,45 +263,28 @@ def test_llama_cpp_chat_uses_openai_compatible_endpoint(monkeypatch, tmp_path):
             "conductor_temperature": 0.4,
             "conductor_max_tokens": 64,
             "conductor_history_turns": 2,
+            "conductor_transcript_enabled": False,
             "conductor_llama_host": "127.0.0.1",
             "conductor_llama_port": 8099,
             "conductor_llama_chat_timeout": 30.0,
         },
     )
 
-    class FakeResponse:
-        status = 200
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return False
-
-        def read(self):
-            return json.dumps(
-                {"choices": [{"message": {"content": "Ready to conduct."}}]}
-            ).encode("utf-8")
-
-    def fake_urlopen(request, timeout):
-        requests.append((request, timeout))
-        return FakeResponse()
-
     daemon = conductor_daemon.ConductorDaemon()
     daemon.llama_ready = True
-    monkeypatch.setattr(conductor_daemon.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(
+        daemon.llama,
+        "chat",
+        lambda messages, **kwargs: calls.append((messages, kwargs)) or "Ready to conduct.",
+    )
 
     response = daemon.chat("help me steer this", conversation_id="work")
 
     assert response == "Ready to conduct."
-    request, timeout = requests[0]
-    assert request.full_url == "http://127.0.0.1:8099/v1/chat/completions"
-    assert timeout == 30.0
-    payload = json.loads(request.data.decode("utf-8"))
-    assert payload["temperature"] == 0.4
-    assert payload["max_tokens"] == 64
-    assert payload["messages"][0]["role"] == "system"
-    assert payload["messages"][-1] == {
+    messages, kwargs = calls[0]
+    assert kwargs == {"temperature": 0.4, "max_tokens": 64}
+    assert messages[0]["role"] == "system"
+    assert messages[-1] == {
         "role": "user",
         "content": "help me steer this",
     }
